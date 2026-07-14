@@ -146,7 +146,7 @@ async def _websocket_endpoint(websocket: WebSocket):
             elif type == "frame":
                 smoother_time = time.perf_counter()
                 node.send_output(
-                    "vr_recv_ts",
+                    "vr_receive_times",
                     pa.array([metadata["timestamp"]], type=pa.int64()),
                     metadata,
                 )
