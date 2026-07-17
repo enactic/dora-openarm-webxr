@@ -105,15 +105,17 @@ if (navigator.xr) {
       }
       const suffix = `_${source.handedness}`;
       const pose = frame.getPose(source.gripSpace, space);
-      response[`pose${suffix}`] = {
-        x: pose.transform.position.x,
-        y: pose.transform.position.y,
-        z: pose.transform.position.z,
-        qx: pose.transform.orientation.x,
-        qy: pose.transform.orientation.y,
-        qz: pose.transform.orientation.z,
-        qw: pose.transform.orientation.w,
-      };
+      if (pose) {
+        response[`pose${suffix}`] = {
+          x: pose.transform.position.x,
+          y: pose.transform.position.y,
+          z: pose.transform.position.z,
+          qx: pose.transform.orientation.x,
+          qy: pose.transform.orientation.y,
+          qz: pose.transform.orientation.z,
+          qw: pose.transform.orientation.w,
+        };
+      }
       const gamepad = source.gamepad;
       if (gamepad) {
         if (
