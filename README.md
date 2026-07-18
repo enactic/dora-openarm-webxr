@@ -86,7 +86,7 @@ included in a `frame` message.
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `status`           | `string`          | `"ready"` when a WebXR session is started.                                                                                                      |
-| `vr_recv_ts`       | `int64`           | The timestamp in nanoseconds when a frame is received from the VR device.                                                                       |
+| `vr_receive_times`       | `int64`           | The timestamp in nanoseconds when a frame is received from the VR device.                                                                       |
 | `pose_right`       | `float32[7]`      | The pose of the right controller as `[x, y, z, qw, qx, qy, qz]`. Position is in meters and orientation is a quaternion in the OpenArm workspace. |
 | `pose_left`        | `float32[7]`      | The pose of the left controller. The format is the same as `pose_right`.                                                                        |
 | `trigger_right`    | `float32`         | The value of the right trigger from `0.0` (released) to `1.0` (fully pressed).                                                                  |

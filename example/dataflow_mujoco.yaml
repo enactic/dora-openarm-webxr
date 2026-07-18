@@ -26,8 +26,8 @@ nodes:
       button_b:
         source: webxr/button_b
         queue_size: 100
-      vr_recv_ts:
-        source: webxr/vr_recv_ts
+      vr_receive_times:
+        source: webxr/vr_receive_times
         queue_size: 100
     outputs:
       - command
@@ -60,7 +60,7 @@ nodes:
       - button_x
       - button_y
       - status
-      - vr_recv_ts
+      - vr_receive_times
 
   - id: ik
     build: pip install dora-openarm-kinematics
