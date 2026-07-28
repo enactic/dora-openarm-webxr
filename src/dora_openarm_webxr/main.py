@@ -21,6 +21,10 @@ pose from WebXR coordinates into the OpenArm workspace, smooths it with
 a One Euro filter, and publishes the pose, trigger, joystick and button
 state as dora-rs outputs.
 
+The published poses are expressed in the scene's ``arm_origin`` site
+frame (chest-level origin between the arms), not in world coordinates.
+Downstream IK interprets targets in the same frame.
+
 The Web server and the dora-rs event loop run concurrently in a single
 asyncio event loop; the server shuts down when the dora-rs node
 receives a ``STOP`` event.
@@ -62,8 +66,8 @@ _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 # Relative pose is computed from viewer.
 # We need to move it to OpenArm position.
 #
-# This is for OpenArm Cell environment.
-_FRAME_OFFSET_CELL: np.ndarray = np.array([0.1, 0, 1.2], dtype=np.float32)
+# Neutral hand position relative to the arm_origin site (chest level).
+_FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
 
 
 app = FastAPI()
