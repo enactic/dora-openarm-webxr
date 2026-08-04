@@ -49,6 +49,10 @@ COMFORTABLE_DISPARITY_DEGREES = 1.0
 # Roughly the gap between an adult's eyes.
 HUMAN_INTERPUPILLARY_DISTANCE = 0.063
 
+# Where a headset's lenses focus, whatever is drawn. Putting the panel
+# here lets the eyes converge and focus at the same depth. A Quest 3.
+HEADSET_FOCAL_DISTANCE = 1.3
+
 
 def find_calibration_file() -> str:
     """Find the ZED SDK's calibration file for the attached camera."""
@@ -153,6 +157,18 @@ def measure_vertical_align(device: str, resolution: str) -> float:
         )
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width * 2)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    # A driver can quietly give a different mode, which would put the
+    # measurement on a different scale to the calibration.
+    actual = (
+        int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+        int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+    )
+    if actual != (width * 2, height):
+        print(
+            f"warning: asked for {width * 2}x{height} but got"
+            f" {actual[0]}x{actual[1]}. Pass --resolution to match.",
+            file=sys.stderr,
+        )
     # The first frames are often still being exposed.
     for _ in range(10):
         captured, frame = capture.read()
@@ -211,8 +227,19 @@ def report(values: dict, resolution: str, path: str) -> None:
         f" {values['horizontal_yaw']:+.1f} yaw"
     )
     print(f"#   roll       {values['roll']:7.1f} px at the corner")
-    if abs(values["vertical_align"]) * degrees > COMFORTABLE_DISPARITY_DEGREES:
-        print("#   -> past what fuses comfortably, so worth correcting.")
+    for name, pixels in [
+        ("vertical", abs(values["vertical_align"])),
+        ("roll", values["roll"]),
+    ]:
+        if pixels * degrees > COMFORTABLE_DISPARITY_DEGREES:
+            print(
+                f"#   -> the {name} offset is past what fuses comfortably"
+                + (
+                    ", and nothing here corrects it."
+                    if name == "roll"
+                    else ", so worth correcting."
+                )
+            )
     print("#")
     print(
         f"# Baseline {values['baseline'] * 1000:.1f} mm against about"
@@ -254,12 +281,6 @@ def main() -> None:
         "--headset-fov",
         default="110x96",
         help="Field of view of one eye of the headset (default: 110x96)",
-    )
-    parser.add_argument(
-        "--headset-focal-distance",
-        type=float,
-        default=1.3,
-        help="Distance the headset's lenses focus at (default: 1.3)",
     )
     parser.add_argument(
         "--measure",
@@ -312,7 +333,7 @@ def main() -> None:
     print("panel:")
     print("  # Where the headset's lenses focus, so the eyes converge and")
     print("  # focus at the same depth.")
-    print(f"  distance: {args.headset_focal_distance:.1f}")
+    print(f"  distance: {HEADSET_FOCAL_DISTANCE:.1f}")
     print()
     print("stereo:")
     print(f"  vertical_align: {vertical_align:.1f}")

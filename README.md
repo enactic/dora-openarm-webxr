@@ -70,11 +70,59 @@ warning. You can continue to the page from its "Advanced" options.
 Press the "Start" button on the page to start teleoperation with your
 VR device.
 
+## Head camera
+
+This dora-rs node can also show a stereo head camera in the VR device,
+so that the operator sees through the robot's head while teleoperating.
+
+The camera is a side-by-side stereo camera such as a ZED Mini. One node
+captures it and a splitter cuts each frame into one JPEG image per eye,
+which this node accepts as the `camera_head_left` and
+`camera_head_right` inputs and forwards to the VR device. A dataset
+recorder can read the same two outputs, so what the operator sees and
+what is recorded are the same images. See
+[`example/head_cam_webxr.yaml`](example/head_cam_webxr.yaml):
+
+```bash
+dora build example/head_cam_webxr.yaml
+dora run example/head_cam_webxr.yaml
+```
+
+How the images are drawn is described by a view configuration file,
+passed with `--view-configuration-file`. The node reads it on every
+request, so the view can be tuned by editing the file and reloading the
+page in the VR device. See
+[`example/head_cam_view.yaml`](example/head_cam_view.yaml) for the
+parameters.
+
+The images are captured over plain video capture rather than through
+the camera's own SDK, so they are not rectified and the two lenses'
+misalignment has to be corrected when they are drawn.
+[`example/zed_view_parameters.py`](example/zed_view_parameters.py)
+works the parameters out from a ZED camera's factory calibration:
+
+```bash
+example/zed_view_parameters.py
+```
+
+Pass `--measure`, with the camera not in use, to measure the alignment
+from the camera itself instead of trusting the calibration.
+
 ## Debug
 
 You can use [Immersive Web
 Emulator](https://chromewebstore.google.com/detail/immersive-web-emulator/cgffilbpcibhmcfbgggfhfolhkfbhmik)
 and Chrome to debug this node without a VR device.
+
+## Inputs
+
+This dora-rs node accepts the following data. Both are optional and are
+only needed to show a head camera in the VR device.
+
+| Input                | Type      | Description                                                                                       |
+|----------------------|-----------|---------------------------------------------------------------------------------------------------|
+| `camera_head_left`   | `uint8[]` | A JPEG image for the left eye, as produced by an image splitter from a side-by-side stereo camera. |
+| `camera_head_right`  | `uint8[]` | A JPEG image for the right eye. The format is the same as `camera_head_left`.                      |
 
 ## Outputs
 
@@ -113,6 +161,7 @@ useful in a dora-rs dataflow YAML.
 | `--port`                 | `PORT`                 | `8443`      | The port that the Web server listens on.                                          |
 | `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS.        |
 | `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required because WebXR requires HTTPS. |
+| `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read on every request, so it can be edited while the node is running. |
 
 ## License
 
