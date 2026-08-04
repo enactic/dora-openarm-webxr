@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createStereoPanel } from "./stereo.js";
+
 if (navigator.xr) {
   let websocket = new WebSocket("wss://" + location.host + "/websocket");
   let runningSession = null;
+  const stereoPanel = createStereoPanel();
 
   websocket.addEventListener("close", (event) => {
     websocket = null;
@@ -37,6 +40,7 @@ if (navigator.xr) {
   }
   function onSessionEnd(event) {
     log("ended");
+    stereoPanel.close();
     runningSession = null;
     if (websocket) {
       websocket.close();
@@ -166,11 +170,12 @@ if (navigator.xr) {
     session.addEventListener("squeeze", onSqueeze);
     session.addEventListener("squeezeend", onSqueezeEnd);
 
-    // We don't render anything but we need to setup render state to use
-    // immersive AR.
+    // The render state is needed to use immersive AR. We draw the head
+    // camera into it as a stereo panel.
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl", { xrCompatible: true });
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+    stereoPanel.attach(gl);
 
     session
       // We send relative position from viewer to the dora-rs node.
@@ -179,6 +184,7 @@ if (navigator.xr) {
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
           sendFrame(session, space, time, frame);
+          stereoPanel.render(session, space, frame);
           session.requestAnimationFrame(onFrame);
         }
         session.requestAnimationFrame(onFrame);
@@ -187,17 +193,24 @@ if (navigator.xr) {
         alert(error);
       });
   }
-  function onStart() {
-    navigator.xr.requestSession("immersive-ar").then(onSessionStart);
+  function onStart(mode) {
+    navigator.xr.requestSession(mode).then(onSessionStart);
   }
 
   websocket.addEventListener("open", () => {
-    navigator.xr.isSessionSupported("immersive-ar").then((isSupported) => {
-      if (isSupported) {
-        // WebXR requires explicit user interaction on start. We use
-        // button click here.
-        document.getElementById("start").addEventListener("click", onStart);
-      }
+    // The session mode is configured with the head camera view so that
+    // passthrough can be turned off without changing this file.
+    stereoPanel.ready.then((configuration) => {
+      const mode = configuration.session.mode;
+      navigator.xr.isSessionSupported(mode).then((isSupported) => {
+        if (isSupported) {
+          // WebXR requires explicit user interaction on start. We use
+          // button click here.
+          document.getElementById("start").addEventListener("click", () => {
+            onStart(mode);
+          });
+        }
+      });
     });
   });
 }

@@ -45,6 +45,7 @@ import time
 import uvicorn
 
 from .smoothing import OneEuroPoseSmoother
+from . import video
 
 args = None
 node = None
@@ -206,6 +207,11 @@ async def _websocket_endpoint(websocket: WebSocket):
         pass
 
 
+# The head camera routes are registered before the static files are
+# mounted on "/" because the mount matches every remaining path.
+video.register_routes(app, lambda: server.should_exit)
+
+
 base_dir = os.path.dirname(__file__)
 app.mount("/", StaticFiles(directory=f"{base_dir}/static", html=True), name="static")
 
@@ -222,6 +228,7 @@ async def _main_dora():
         event = node.next()
         if event["type"] == "STOP":
             break
+        video.handle_event(event)
     server.should_exit = True
 
 
@@ -275,9 +282,12 @@ def main():
         required=tls_key_file_default is None,
         help="TLS key file for the certificate file",
     )
+    video.add_arguments(parser)
 
     global args
     args = parser.parse_args()
+
+    video.configure(args)
 
     global node
     node = dora.Node()
