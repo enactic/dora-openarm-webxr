@@ -44,6 +44,10 @@ nodes:
   - id: webxr
     build: pip install -e ..
     path: dora-openarm-webxr
+    env:
+      TLS_CERTIFICATE_FILE: "server.crt"
+      TLS_KEY_FILE: "server.key"
+      VIEW_CONFIGURATION_FILE: "head_cam_view.yaml"
     inputs:
       tick: quittable-tick-leader/tick
     outputs:
