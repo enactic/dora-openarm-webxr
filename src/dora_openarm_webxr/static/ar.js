@@ -103,17 +103,21 @@ if (navigator.xr) {
       type: "frame",
       time: time,
     };
-    const viewerPose = frame.getViewerPose(localSpace);
-    if (viewerPose) {
-      response.pose_head = {
-        x: viewerPose.transform.position.x,
-        y: viewerPose.transform.position.y,
-        z: viewerPose.transform.position.z,
-        qx: viewerPose.transform.orientation.x,
-        qy: viewerPose.transform.orientation.y,
-        qz: viewerPose.transform.orientation.z,
-        qw: viewerPose.transform.orientation.w,
-      };
+    // A missing local space (request failed or unsupported) just
+    // disables tilt compensation; the rest of the frame still sends.
+    if (localSpace) {
+      const viewerPose = frame.getViewerPose(localSpace);
+      if (viewerPose) {
+        response.pose_head = {
+          x: viewerPose.transform.position.x,
+          y: viewerPose.transform.position.y,
+          z: viewerPose.transform.position.z,
+          qx: viewerPose.transform.orientation.x,
+          qy: viewerPose.transform.orientation.y,
+          qz: viewerPose.transform.orientation.z,
+          qw: viewerPose.transform.orientation.w,
+        };
+      }
     }
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
@@ -192,9 +196,10 @@ if (navigator.xr) {
     Promise.all([
       // We send relative position from viewer to the dora-rs node. The
       // local space gives the headset pose so the server can cancel the
-      // head tilt from the relative poses.
+      // head tilt from the relative poses. If it is unavailable on this
+      // device, fall back to null and just skip tilt compensation.
       session.requestReferenceSpace("viewer"),
-      session.requestReferenceSpace("local"),
+      session.requestReferenceSpace("local").catch(() => null),
     ])
       .then(([space, localSpace]) => {
         function onFrame(time, frame) {

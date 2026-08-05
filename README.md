@@ -133,8 +133,9 @@ included in a `frame` message.
 
 Controller poses are compensated for the headset tilt: the head pitch
 and roll are cancelled every frame so the mapping stays gravity-aligned,
-while the headset yaw and position are still followed. Frames that do
-not include a headset pose are published uncompensated.
+while the headset yaw and position are still followed. A frame without
+a headset pose reuses the most recent compensation; until the first
+one arrives, poses are published uncompensated.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
