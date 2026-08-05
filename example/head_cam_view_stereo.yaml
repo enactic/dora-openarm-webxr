@@ -17,7 +17,7 @@
 # camera_head_right inputs. For the default room-fixed view, point
 # VIEW_CONFIGURATION_FILE at head_cam_view.yaml instead.
 #
-# Read on every request, so edit and reload the page to apply.
+# Read once when the node starts, so restart the dataflow to apply.
 #
 # The camera and stereo values come from the camera's own calibration.
 # To regenerate them, with --working-distance set to the distance
@@ -64,6 +64,5 @@ stereo:
 
 pose:
   # Neutral hand position relative to the arm_origin site (chest
-  # level), in meters. Unlike the sections above, read once at node
-  # startup, so restart the dataflow to apply.
+  # level), in meters.
   frame_offset: [-0.1, 0.0, 0.23]

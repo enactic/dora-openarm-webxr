@@ -57,8 +57,6 @@ _frames: dict = {"left": None, "right": None}
 _sequences: dict = {"left": 0, "right": 0}
 _frame_event = asyncio.Event()
 
-_view_configuration_file: pathlib.Path | None = None
-# Last good one, so saving a half-written file cannot break a session.
 _view_configuration: dict = DEFAULT_VIEW_CONFIGURATION
 
 
@@ -73,31 +71,25 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def configure(args: argparse.Namespace) -> None:
-    """Remember the view configuration file if one was given."""
-    global _view_configuration_file
-    _view_configuration_file = getattr(args, "view_configuration_file", None)
+    """Read the view configuration at startup if a file was given.
 
-
-def _read_view_configuration() -> dict:
-    """Read the view configuration file.
-
-    Read per request, not once at startup, so the panel can be tuned by
-    editing the file and reloading the page in the VR device.
+    Read once; restart the dataflow to apply a change.
     """
+    path = getattr(args, "view_configuration_file", None)
+    if path is None:
+        return
     global _view_configuration
-    if _view_configuration_file is None:
-        return _view_configuration
     try:
-        with open(_view_configuration_file, encoding="utf-8") as input:
+        with open(path, encoding="utf-8") as input:
             _view_configuration = yaml.safe_load(input)
     except (OSError, yaml.YAMLError) as error:
-        print(f"cannot read {_view_configuration_file}: {error}", flush=True)
-    return _view_configuration
+        # Keep the default so a broken file cannot stop the node.
+        print(f"cannot read {path}: {error}", flush=True)
 
 
 def view_configuration() -> dict:
-    """Return the view configuration, reading the file when one is set."""
-    return _read_view_configuration()
+    """Return the view configuration read at startup."""
+    return _view_configuration
 
 
 def handle_event(event) -> bool:
@@ -122,13 +114,12 @@ def register_routes(app: FastAPI, should_exit) -> None:
     @app.get("/view_configuration")
     async def _view_configuration_endpoint():
         """Serve the camera panel parameters to the WebXR front-end."""
-        return _read_view_configuration()
+        return _view_configuration
 
     @app.websocket("/video")
     async def _video_endpoint(websocket: WebSocket):
         await websocket.accept()
-        # Read once per connection; the page reloads to change views.
-        stereo = _read_view_configuration().get("view") == "stereo"
+        stereo = _view_configuration.get("view") == "stereo"
         eyes = ["left", "right"] if stereo else ["right"]
         sent = {eye: -1 for eye in eyes}
         try:

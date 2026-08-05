@@ -84,10 +84,9 @@ stays put when the operator moves their head. See
 [`example/dataflow_mujoco_head_cam.yaml`](example/dataflow_mujoco_head_cam.yaml).
 
 How the panel is drawn is described by a view configuration file,
-passed with `--view-configuration-file`. The node reads it on every
-request, so the view can be tuned by editing the file and reloading the
-page in the VR device. Two example files select the two views with
-their `view` key:
+passed with `--view-configuration-file`. The node reads it once when
+it starts, so restart the dataflow to apply a change. The example
+files select the view with their `view` key:
 
 - [`example/head_cam_view.yaml`](example/head_cam_view.yaml) — the
   default `fixed` view above. Parameters: the session mode, the panel
@@ -100,9 +99,9 @@ their `view` key:
   [`example/zed_view_parameters.py`](example/zed_view_parameters.py)
   works its camera and alignment parameters out from a ZED camera's
   factory calibration.
-- [`example/head_cam_view_none.yaml`](example/head_cam_view_none.yaml)
-  — the `none` view: no camera at all; the operator sees the
-  passthrough and only the controller poses are used.
+
+`view: none` shows no camera at all: the operator sees the passthrough
+and only the controller poses are used.
 
 ## Debug
 
@@ -157,7 +156,7 @@ useful in a dora-rs dataflow YAML.
 | `--port`                 | `PORT`                 | `8443`      | The port that the Web server listens on.                                          |
 | `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS.        |
 | `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required because WebXR requires HTTPS. |
-| `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read on every request, so it can be edited while the node is running. |
+| `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
 
 ## License
 
