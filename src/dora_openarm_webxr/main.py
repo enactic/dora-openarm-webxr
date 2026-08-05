@@ -68,6 +68,7 @@ _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 # We need to move it to OpenArm position.
 #
 # Neutral hand position relative to the arm_origin site (chest level).
+# Overridden by ``pose: frame_offset`` in the view configuration file.
 _FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
 
 
@@ -288,6 +289,12 @@ def main():
     args = parser.parse_args()
 
     video.configure(args)
+
+    # Read once at startup; restart the dataflow to apply a change.
+    frame_offset = (video.view_configuration().get("pose") or {}).get("frame_offset")
+    if frame_offset is not None:
+        global _FRAME_OFFSET_CELL
+        _FRAME_OFFSET_CELL = np.array(frame_offset, dtype=np.float32).reshape(3)
 
     global node
     node = dora.Node()

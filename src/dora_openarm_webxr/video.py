@@ -94,6 +94,11 @@ def _read_view_configuration() -> dict:
     return _view_configuration
 
 
+def view_configuration() -> dict:
+    """Return the view configuration, reading the file when one is set."""
+    return _read_view_configuration()
+
+
 def handle_event(event) -> bool:
     """Store a head camera frame. Return whether the event was ours."""
     if event["type"] != "INPUT" or event["id"] not in CAMERA_INPUTS:

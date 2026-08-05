@@ -68,6 +68,12 @@ stereo:
   # but the images themselves show 10.0.
   vertical_align: 10.0
 
-  # Sideways. 
+  # Sideways.
   # More negative pulls the scene closer to the eyes, more positive pushes it away.
   convergence: -1.7
+
+pose:
+  # Neutral hand position relative to the arm_origin site (chest
+  # level), in meters. Unlike the sections above, read once at node
+  # startup, so restart the dataflow to apply.
+  frame_offset: [-0.085, 0.0, -0.14]

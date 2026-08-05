@@ -27,6 +27,7 @@ dependencies = [
   "pyyaml",
   "uvicorn",
   "websockets",
+  "scipy"
 ]
 
 [project.urls]
