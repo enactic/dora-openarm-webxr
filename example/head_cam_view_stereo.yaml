@@ -20,10 +20,9 @@
 # Read once when the node starts, so restart the dataflow to apply.
 #
 # The camera and stereo values come from the camera's own calibration.
-# To regenerate them, with --working-distance set to the distance
-# usually worked at:
+# To regenerate them:
 #
-#   python example/zed_view_parameters.py --working-distance 0.75
+#   python example/zed_view_parameters.py
 #
 # Add --measure, with the camera free, to check the eye alignment
 # against the camera instead of trusting the calibration:

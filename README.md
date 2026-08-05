@@ -103,6 +103,10 @@ files select the view with their `view` key:
 `view: none` shows no camera at all: the operator sees the passthrough
 and only the controller poses are used.
 
+Both files also take `pose.frame_offset`: the neutral hand position
+relative to the `arm_origin` site in meters, overriding the built-in
+default of `[-0.085, 0, -0.14]`.
+
 ## Debug
 
 You can use [Immersive Web
