@@ -47,16 +47,20 @@ nodes:
     env:
       TLS_CERTIFICATE_FILE: "server.crt"
       TLS_KEY_FILE: "server.key"
+      # head_cam_view.yaml fixes one image in the room;
+      # head_cam_view_stereo.yaml locks one image per eye to the head.
       VIEW_CONFIGURATION_FILE: "head_cam_view.yaml"
     inputs:
       tick: dora/timer/secs/1
       # Keeps the view on the newest frame. Without it, frames the VR
       # device cannot keep up with queue and latency grows.
-      camera_head_left:
-        source: mujoco/camera_head_right # currently openarm_mujoco head cam is flipped
-        queue_size: 1
       camera_head_right:
-        source: mujoco/camera_head_left # currently openarm_mujoco head cam is flipped
+        source: mujoco/camera_head_right
+        queue_size: 1
+      # Only used by the stereo view. Swap the two sources if your
+      # openarm_mujoco build still has the head cameras flipped.
+      camera_head_left:
+        source: mujoco/camera_head_left
         queue_size: 1
     outputs:
       - pose_right

@@ -12,12 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createCameraPanel } from "./panel.js";
 import { createStereoPanel } from "./stereo.js";
+
+// Used only when the node's view configuration cannot be read.
+const FALLBACK_CONFIGURATION = {
+  view: "fixed",
+  session: { mode: "immersive-ar" },
+  panel: { distance: 1.3, width: 1.5 },
+};
 
 if (navigator.xr) {
   let websocket = new WebSocket("wss://" + location.host + "/websocket");
   let runningSession = null;
-  const stereoPanel = createStereoPanel();
+  let configuration = null;
+  let cameraPanel = null;
+  // Started early so the first frame is ready by session start. The
+  // session can only start once this has resolved, so the view and the
+  // panel are always set by then.
+  const configurationReady = fetch("view_configuration")
+    .then((response) => response.json())
+    .catch((error) => {
+      console.error("cannot read view configuration: " + error);
+      // So a missing file cannot stop the session starting.
+      return FALLBACK_CONFIGURATION;
+    })
+    .then((loaded) => {
+      configuration = loaded;
+      // The default fixed view hangs one image in the room; the stereo
+      // view locks one image per eye to the operator's head.
+      cameraPanel =
+        configuration.view === "stereo"
+          ? createStereoPanel(configuration)
+          : createCameraPanel(configuration);
+      return configuration;
+    });
 
   websocket.addEventListener("close", (event) => {
     websocket = null;
@@ -40,7 +69,9 @@ if (navigator.xr) {
   }
   function onSessionEnd(event) {
     log("ended");
-    stereoPanel.close();
+    if (cameraPanel) {
+      cameraPanel.close();
+    }
     runningSession = null;
     if (websocket) {
       websocket.close();
@@ -95,7 +126,7 @@ if (navigator.xr) {
     };
     websocket.send(JSON.stringify(response));
   }
-  function sendFrame(session, space, localSpace, time, frame) {
+  function sendFrame(session, space, time, frame) {
     if (session.inputSources.length < 2) {
       return;
     }
@@ -103,22 +134,6 @@ if (navigator.xr) {
       type: "frame",
       time: time,
     };
-    // A missing local space (request failed or unsupported) just
-    // disables tilt compensation; the rest of the frame still sends.
-    if (localSpace) {
-      const viewerPose = frame.getViewerPose(localSpace);
-      if (viewerPose) {
-        response.pose_head = {
-          x: viewerPose.transform.position.x,
-          y: viewerPose.transform.position.y,
-          z: viewerPose.transform.position.z,
-          qx: viewerPose.transform.orientation.x,
-          qy: viewerPose.transform.orientation.y,
-          qz: viewerPose.transform.orientation.z,
-          qw: viewerPose.transform.orientation.w,
-        };
-      }
-    }
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
         continue;
@@ -187,25 +202,28 @@ if (navigator.xr) {
     session.addEventListener("squeezeend", onSqueezeEnd);
 
     // The render state is needed to use immersive AR. We draw the head
-    // camera into it as a stereo panel.
+    // camera into it as a panel fixed in the room.
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl", { xrCompatible: true });
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
-    stereoPanel.attach(gl);
+    cameraPanel.attach(gl);
 
     Promise.all([
-      // We send relative position from viewer to the dora-rs node. The
-      // local space gives the headset pose so the server can cancel the
-      // head tilt from the relative poses. If it is unavailable on this
-      // device, fall back to null and just skip tilt compensation.
+      // The hand poses always live in the world-fixed local space,
+      // whose origin is the headset pose when the session starts, so
+      // head motion does not move them. The panel lives there too when
+      // fixed in the room, but in the viewer space when head-locked
+      // (stereo view).
+      session.requestReferenceSpace("local"),
       session.requestReferenceSpace("viewer"),
-      session.requestReferenceSpace("local").catch(() => null),
     ])
-      .then(([space, localSpace]) => {
+      .then(([localSpace, viewerSpace]) => {
+        const panelSpace =
+          configuration.view === "stereo" ? viewerSpace : localSpace;
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
-          sendFrame(session, space, localSpace, time, frame);
-          stereoPanel.render(session, space, frame);
+          sendFrame(session, localSpace, time, frame);
+          cameraPanel.render(session, panelSpace, frame);
           session.requestAnimationFrame(onFrame);
         }
         session.requestAnimationFrame(onFrame);
@@ -221,7 +239,7 @@ if (navigator.xr) {
   websocket.addEventListener("open", () => {
     // The session mode is configured with the head camera view so that
     // passthrough can be turned off without changing this file.
-    stereoPanel.ready.then((configuration) => {
+    configurationReady.then((configuration) => {
       const mode = configuration.session.mode;
       navigator.xr.isSessionSupported(mode).then((isSupported) => {
         if (isSupported) {

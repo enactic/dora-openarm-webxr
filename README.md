@@ -72,41 +72,34 @@ VR device.
 
 ## Head camera
 
-This dora-rs node can also show a stereo head camera in the VR device,
-so that the operator sees through the robot's head while teleoperating.
+This dora-rs node can also show the robot's head camera in the VR
+device, so that the operator sees the robot's workspace while
+teleoperating.
 
-The camera is a side-by-side stereo camera such as a ZED Mini. One node
-captures it and a splitter cuts each frame into one JPEG image per eye,
-which this node accepts as the `camera_head_left` and
-`camera_head_right` inputs and forwards to the VR device. A dataset
-recorder can read the same two outputs, so what the operator sees and
-what is recorded are the same images. See
-[`example/head_cam_webxr.yaml`](example/head_cam_webxr.yaml):
+The node accepts JPEG images on the `camera_head_right` input and
+forwards them to the VR device, where they are drawn on a panel fixed
+in the room: straight ahead of where the headset was when the session
+started, at eye height. Both eyes see the same image, and the panel
+stays put when the operator moves their head. See
+[`example/dataflow_mujoco_head_cam.yaml`](example/dataflow_mujoco_head_cam.yaml).
 
-```bash
-dora build example/head_cam_webxr.yaml
-dora run example/head_cam_webxr.yaml
-```
-
-How the images are drawn is described by a view configuration file,
+How the panel is drawn is described by a view configuration file,
 passed with `--view-configuration-file`. The node reads it on every
 request, so the view can be tuned by editing the file and reloading the
-page in the VR device. See
-[`example/head_cam_view.yaml`](example/head_cam_view.yaml) for the
-parameters.
+page in the VR device. Two example files select the two views with
+their `view` key:
 
-The images are captured over plain video capture rather than through
-the camera's own SDK, so they are not rectified and the two lenses'
-misalignment has to be corrected when they are drawn.
-[`example/zed_view_parameters.py`](example/zed_view_parameters.py)
-works the parameters out from a ZED camera's factory calibration:
-
-```bash
-example/zed_view_parameters.py
-```
-
-Pass `--measure`, with the camera not in use, to measure the alignment
-from the camera itself instead of trusting the calibration.
+- [`example/head_cam_view.yaml`](example/head_cam_view.yaml) — the
+  default `fixed` view above. Parameters: the session mode, the panel
+  distance and the panel width (the height follows the image aspect
+  ratio).
+- [`example/head_cam_view_stereo.yaml`](example/head_cam_view_stereo.yaml)
+  — the `stereo` view: one image per eye on a head-locked panel, for a
+  side-by-side stereo camera such as a ZED Mini. It also needs the
+  `camera_head_left` input, and
+  [`example/zed_view_parameters.py`](example/zed_view_parameters.py)
+  works its camera and alignment parameters out from a ZED camera's
+  factory calibration.
 
 ## Debug
 
@@ -116,13 +109,13 @@ and Chrome to debug this node without a VR device.
 
 ## Inputs
 
-This dora-rs node accepts the following data. Both are optional and are
+This dora-rs node accepts the following data. Both are optional and
 only needed to show a head camera in the VR device.
 
-| Input                | Type      | Description                                                                                       |
-|----------------------|-----------|---------------------------------------------------------------------------------------------------|
-| `camera_head_left`   | `uint8[]` | A JPEG image for the left eye, as produced by an image splitter from a side-by-side stereo camera. |
-| `camera_head_right`  | `uint8[]` | A JPEG image for the right eye. The format is the same as `camera_head_left`.                      |
+| Input                | Type      | Description                                                              |
+|----------------------|-----------|--------------------------------------------------------------------------|
+| `camera_head_right`  | `uint8[]` | A JPEG image of the robot's head camera.                                 |
+| `camera_head_left`   | `uint8[]` | A JPEG image for the left eye. Only used by the stereo view.             |
 
 ## Outputs
 
@@ -131,11 +124,11 @@ joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
 included in a `frame` message.
 
-Controller poses are compensated for the headset tilt: the head pitch
-and roll are cancelled every frame so the mapping stays gravity-aligned,
-while the headset yaw and position are still followed. A frame without
-a headset pose reuses the most recent compensation; until the first
-one arrives, poses are published uncompensated.
+Controller poses are read in the WebXR `local` reference space:
+gravity-aligned, world-fixed axes anchored at the headset pose when the
+session starts. Head motion therefore does not move the published
+poses; recentering the headset re-anchors the space, which acts as a
+re-calibration.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|

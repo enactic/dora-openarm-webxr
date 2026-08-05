@@ -64,31 +64,13 @@ _ROBOT_ROTATION_MATRIX: np.ndarray = np.array(
 )
 _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 
-# Relative pose is computed from viewer.
-# We need to move it to OpenArm position.
+# Poses arrive in the WebXR local space: gravity-aligned, with the
+# origin at the headset pose when the session starts, so head motion
+# does not move them. We need to move them to OpenArm position.
 #
 # Neutral hand position relative to the arm_origin site (chest level).
 # Overridden by ``pose: frame_offset`` in the view configuration file.
 _FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
-
-
-# When the operator tilts the head, the viewer reference space tilts
-# with it and the controller poses rotate even though the hands did not
-# move. We cancel the head pitch and roll every frame and keep only the
-# yaw, so the hand to robot mapping stays gravity-aligned.
-def _head_tilt_compensation(head_rotation: Rotation) -> Rotation | None:
-    """Pitch/roll residual ``yaw(H)^-1 * H`` of the headset rotation.
-
-    ``None`` when the head looks nearly straight up or down, where the
-    yaw is undefined; the caller keeps the previous compensation.
-    """
-    forward = head_rotation.apply([0.0, 0.0, -1.0])
-    # Within about 0.06 degrees of straight up or down the yaw estimate
-    # is dominated by tracking noise.
-    if np.hypot(forward[0], forward[2]) < 1e-3:
-        return None
-    yaw = np.arctan2(-forward[0], -forward[2])
-    return Rotation.from_euler("y", yaw).inv() * head_rotation
 
 
 app = FastAPI()
@@ -102,7 +84,7 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
         return (1.57 / 2.0) * (1.0 - trigger)  # 0-> 1.57, 1->0
 
 
-def _adjust_pose(pose, compensation, smoother, smoother_time):
+def _adjust_pose(pose, smoother, smoother_time):
     """Convert WebXR style pose to our style.
 
     WebXR style:
@@ -120,18 +102,13 @@ def _adjust_pose(pose, compensation, smoother, smoother_time):
     Our style:
       * right-handed
       * [x, y, z, qw, qx, qy, qz]
-
-    ``compensation`` is the head tilt residual from
-    ``_head_tilt_compensation``, applied in viewer space before the
-    robot-frame transform.
     """
     position = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32)
-    position = compensation.apply(position)
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
     # TODO: Add a comment why we need this
     rotation_fix = Rotation.from_euler("z", 90, degrees=True)
-    rotation = _ROBOT_ROTATION * compensation * rotation * rotation_fix
+    rotation = _ROBOT_ROTATION * rotation * rotation_fix
     quaternion = rotation.as_quat()
 
     adjusted_pose = np.array(
@@ -163,7 +140,6 @@ async def _websocket_endpoint(websocket: WebSocket):
         "right": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
         "left": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
     }
-    compensation = Rotation.identity()
 
     await websocket.accept()
     try:
@@ -189,21 +165,13 @@ async def _websocket_endpoint(websocket: WebSocket):
                             pa.array([bool(response[name])], type=pa.bool_()),
                             metadata,
                         )
-                head = response.get("pose_head")
-                if head is not None:
-                    head_rotation = Rotation.from_quat(
-                        [head["qx"], head["qy"], head["qz"], head["qw"]]
-                    )
-                    new_compensation = _head_tilt_compensation(head_rotation)
-                    if new_compensation is not None:
-                        compensation = new_compensation
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
                     if pose in response and trigger in response:
                         smoother = smoothers[side]
                         adjusted_pose = _adjust_pose(
-                            response[pose], compensation, smoother, smoother_time
+                            response[pose], smoother, smoother_time
                         )
                         gripper_angle = _map_trigger_to_gripper(response[trigger], side)
                         gripper_array = np.array([gripper_angle], dtype=np.float32)

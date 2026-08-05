@@ -14,12 +14,12 @@
 
 """Head camera video downlink for the WebXR front-end.
 
-Takes the per-eye JPEG images a splitter node has cut out of a
-side-by-side stereo camera and forwards them to the VR device, so the
-operator can see through the robot's head while teleoperating.
+Takes the JPEG images of the robot's head camera and forwards them to
+the VR device, so the operator can see the robot's workspace while
+teleoperating. The image is drawn on a panel fixed in the room.
 
 Frames go on their own WebSocket so they never delay the pose messages
-that feed IK. How they are drawn is tuned in
+that feed IK. How the panel is placed is tuned in
 ``example/head_cam_view.yaml``.
 """
 
@@ -33,6 +33,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 
 # dora-rs input IDs mapped to the eye that the frame is rendered on.
+# The default fixed view uses only the right eye; the stereo view uses
+# both.
 CAMERA_INPUTS = {
     "camera_head_left": "left",
     "camera_head_right": "right",
@@ -44,15 +46,14 @@ EYE_PREFIX = {"left": b"\x00", "right": b"\x01"}
 
 # Used when no --view-configuration-file is given.
 DEFAULT_VIEW_CONFIGURATION: dict = {
+    "view": "fixed",
     "session": {"mode": "immersive-ar"},
-    "camera": {"horizontal_fov": 79.4, "vertical_fov": 50.1},
-    "panel": {"distance": 1.0},
-    "stereo": {"vertical_align": 0.0, "convergence": 0.0},
+    "panel": {"distance": 1.3, "width": 1.5},
 }
 
 _frames: dict = {"left": None, "right": None}
 # Incremented on every frame so that the video endpoint can tell a new
-# frame from a repeated one and always send the most recent pair.
+# frame from a repeated one and always send the most recent one.
 _sequences: dict = {"left": 0, "right": 0}
 _frame_event = asyncio.Event()
 
@@ -67,7 +68,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         "--view-configuration-file",
         type=pathlib.Path,
         default=os.getenv("VIEW_CONFIGURATION_FILE"),
-        help="YAML file with the head camera stereo panel parameters",
+        help="YAML file with the head camera panel parameters",
     )
 
 
@@ -104,7 +105,7 @@ def handle_event(event) -> bool:
     if event["type"] != "INPUT" or event["id"] not in CAMERA_INPUTS:
         return False
     eye = CAMERA_INPUTS[event["id"]]
-    # The splitter sends JPEG data as a uint8 array.
+    # The camera node sends JPEG data as a uint8 array.
     _frames[eye] = event["value"].to_numpy(zero_copy_only=False).tobytes()
     _sequences[eye] += 1
     _frame_event.set()
@@ -120,13 +121,16 @@ def register_routes(app: FastAPI, should_exit) -> None:
 
     @app.get("/view_configuration")
     async def _view_configuration_endpoint():
-        """Serve the stereo panel parameters to the WebXR front-end."""
+        """Serve the camera panel parameters to the WebXR front-end."""
         return _read_view_configuration()
 
     @app.websocket("/video")
     async def _video_endpoint(websocket: WebSocket):
         await websocket.accept()
-        sent = {"left": -1, "right": -1}
+        # Read once per connection; the page reloads to change views.
+        stereo = _read_view_configuration().get("view") == "stereo"
+        eyes = ["left", "right"] if stereo else ["right"]
+        sent = {eye: -1 for eye in eyes}
         try:
             while not should_exit():
                 try:
@@ -135,14 +139,14 @@ def register_routes(app: FastAPI, should_exit) -> None:
                     # Loop so shutdown is noticed.
                     continue
                 _frame_event.clear()
-                if any(_frames[eye] is None for eye in EYE_PREFIX):
+                if any(_frames[eye] is None for eye in eyes):
                     continue
-                if all(_sequences[eye] == sent[eye] for eye in EYE_PREFIX):
+                if all(_sequences[eye] == sent[eye] for eye in eyes):
                     continue
                 # Together, so the eyes never show different frames.
-                for eye, prefix in EYE_PREFIX.items():
+                for eye in eyes:
                     sent[eye] = _sequences[eye]
-                    await websocket.send_bytes(prefix + _frames[eye])
+                    await websocket.send_bytes(EYE_PREFIX[eye] + _frames[eye])
             await websocket.close()
         except WebSocketDisconnect:
             pass

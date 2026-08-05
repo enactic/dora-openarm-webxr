@@ -12,35 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Draws the head camera as a stereo panel inside the WebXR session.
-// Selected with "view: stereo" in the view configuration.
+// Draws the head camera image on a panel fixed in the room.
 //
-// The panel is locked to the operator's head. The camera sits on a neck
-// that follows them, so the image already lags; keeping the frame
-// steady makes that lag far easier to tolerate than a whole view that
-// slides late.
-//
-// The camera sees less than the headset shows, so the panel covers the
-// field of view it is given and leaves the rest of the display empty.
-// Giving it more than the camera really sees fills more of the view but
-// magnifies. All of these numbers come from the node over
-// `/view_configuration`.
+// The panel hangs in the world-fixed local space, straight ahead of
+// where the headset was when the session started, so the operator can
+// look around it or lean in while the image stays put. Both eyes see
+// the same image; depth comes from the panel sitting at a real
+// distance. Where it hangs is tuned over `/view_configuration`.
 
 const VERTEX_SHADER = `
 attribute vec2 a_corner;
 uniform mat4 u_projection;
+uniform mat4 u_view;
 uniform vec2 u_half_extent;
 uniform float u_distance;
-uniform vec2 u_uv_offset;
 varying vec2 v_uv;
 void main() {
-  gl_Position =
-    u_projection * vec4(a_corner * u_half_extent, -u_distance, 1.0);
+  gl_Position = u_projection * u_view *
+    vec4(a_corner * u_half_extent, -u_distance, 1.0);
   // Flipped because the image starts at its top row and texture
   // coordinates start at the bottom. Done here rather than with
   // UNPACK_FLIP_Y_WEBGL, which browsers honour inconsistently.
-  v_uv = vec2((a_corner.x + 1.0) * 0.5, (1.0 - a_corner.y) * 0.5) +
-    u_uv_offset;
+  v_uv = vec2((a_corner.x + 1.0) * 0.5, (1.0 - a_corner.y) * 0.5);
 }
 `;
 
@@ -49,19 +42,12 @@ precision mediump float;
 uniform sampler2D u_texture;
 varying vec2 v_uv;
 void main() {
-  if (v_uv.x < 0.0 || v_uv.x > 1.0 || v_uv.y < 0.0 || v_uv.y > 1.0) {
-    discard;
-  }
   gl_FragColor = texture2D(u_texture, v_uv);
 }
 `;
 
-const EYES = ["left", "right"];
 // Must match EYE_PREFIX in video.py.
-const EYE_BY_PREFIX = { 0: "left", 1: "right" };
-
-// Used when the configuration misses the stereo-only sections.
-const DEFAULT_CAMERA = { horizontal_fov: 79.4, vertical_fov: 50.1 };
+const RIGHT_EYE_PREFIX = 1;
 
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
@@ -73,14 +59,14 @@ function compile(gl, type, source) {
   return shader;
 }
 
-class StereoPanel {
+class CameraPanel {
   #gl = null;
   #program = null;
   #buffer = null;
   #attributes = {};
   #uniforms = {};
-  #textures = {};
-  #pending = { left: null, right: null };
+  #texture = null;
+  #pending = null;
   #size = { width: 0, height: 0 };
   #configuration = null;
   #websocket = null;
@@ -92,18 +78,18 @@ class StereoPanel {
     websocket.binaryType = "arraybuffer";
     websocket.addEventListener("message", (event) => {
       const message = new Uint8Array(event.data);
-      const eye = EYE_BY_PREFIX[message[0]];
-      if (eye === undefined) {
+      // Only the right camera; the left one is for the stereo view.
+      if (message[0] !== RIGHT_EYE_PREFIX) {
         return;
       }
       const jpeg = message.subarray(1);
       createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
         .then((bitmap) => {
           // Drop anything still waiting; it is already stale.
-          if (this.#pending[eye]) {
-            this.#pending[eye].close();
+          if (this.#pending) {
+            this.#pending.close();
           }
-          this.#pending[eye] = bitmap;
+          this.#pending = bitmap;
         })
         .catch(() => {});
     });
@@ -125,9 +111,9 @@ class StereoPanel {
     this.#attributes.corner = gl.getAttribLocation(program, "a_corner");
     for (const name of [
       "u_projection",
+      "u_view",
       "u_half_extent",
       "u_distance",
-      "u_uv_offset",
       "u_texture",
     ]) {
       this.#uniforms[name] = gl.getUniformLocation(program, name);
@@ -141,53 +127,29 @@ class StereoPanel {
       gl.STATIC_DRAW,
     );
 
-    for (const eye of EYES) {
-      const texture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      // Not a power of two, so no mipmaps and no repeating.
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      this.#textures[eye] = texture;
-    }
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    // Not a power of two, so no mipmaps and no repeating.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.#texture = texture;
     // The vertical flip is done in the vertex shader instead.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   }
 
   #upload() {
+    if (!this.#pending) {
+      return;
+    }
     const gl = this.#gl;
-    for (const eye of EYES) {
-      const bitmap = this.#pending[eye];
-      if (!bitmap) {
-        continue;
-      }
-      gl.bindTexture(gl.TEXTURE_2D, this.#textures[eye]);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        bitmap,
-      );
-      this.#size = { width: bitmap.width, height: bitmap.height };
-      bitmap.close();
-      this.#pending[eye] = null;
-    }
-  }
-
-  // Offsets are in source pixels to match a calibration; the shader
-  // wants texture coordinates.
-  #uvOffset(eye) {
-    if (eye !== "right" || this.#size.width === 0) {
-      return [0, 0];
-    }
-    const stereo = this.#configuration.stereo || {};
-    return [
-      (stereo.convergence || 0) / this.#size.width,
-      (stereo.vertical_align || 0) / this.#size.height,
-    ];
+    const bitmap = this.#pending;
+    gl.bindTexture(gl.TEXTURE_2D, this.#texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    this.#size = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    this.#pending = null;
   }
 
   render(session, space, frame) {
@@ -208,14 +170,16 @@ class StereoPanel {
     gl.disable(gl.DEPTH_TEST);
 
     this.#upload();
+    if (this.#size.width === 0) {
+      // No frame yet, so no aspect ratio to size the panel with.
+      return;
+    }
 
-    const distance = this.#configuration.panel.distance;
-    const camera = this.#configuration.camera || DEFAULT_CAMERA;
-    const toRadians = Math.PI / 180.0;
-    // The panel covers exactly the field of view it is given.
+    const panel = this.#configuration.panel;
+    // The height follows the image so it is never stretched.
     const halfExtent = [
-      distance * Math.tan((camera.horizontal_fov * toRadians) / 2.0),
-      distance * Math.tan((camera.vertical_fov * toRadians) / 2.0),
+      panel.width / 2.0,
+      ((panel.width / 2.0) * this.#size.height) / this.#size.width,
     ];
 
     gl.useProgram(this.#program);
@@ -223,13 +187,12 @@ class StereoPanel {
     gl.enableVertexAttribArray(this.#attributes.corner);
     gl.vertexAttribPointer(this.#attributes.corner, 2, gl.FLOAT, false, 0, 0);
     gl.uniform2f(this.#uniforms.u_half_extent, halfExtent[0], halfExtent[1]);
-    gl.uniform1f(this.#uniforms.u_distance, distance);
+    gl.uniform1f(this.#uniforms.u_distance, panel.distance);
     gl.uniform1i(this.#uniforms.u_texture, 0);
     gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.#texture);
 
     for (const view of pose.views) {
-      // "none" only happens on a monoscopic device.
-      const eye = view.eye === "right" ? "right" : "left";
       const viewport = layer.getViewport(view);
       gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
       gl.uniformMatrix4fv(
@@ -237,9 +200,11 @@ class StereoPanel {
         false,
         view.projectionMatrix,
       );
-      const offset = this.#uvOffset(eye);
-      gl.uniform2f(this.#uniforms.u_uv_offset, offset[0], offset[1]);
-      gl.bindTexture(gl.TEXTURE_2D, this.#textures[eye]);
+      gl.uniformMatrix4fv(
+        this.#uniforms.u_view,
+        false,
+        view.transform.inverse.matrix,
+      );
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
   }
@@ -249,15 +214,13 @@ class StereoPanel {
       this.#websocket.close();
       this.#websocket = null;
     }
-    for (const eye of EYES) {
-      if (this.#pending[eye]) {
-        this.#pending[eye].close();
-        this.#pending[eye] = null;
-      }
+    if (this.#pending) {
+      this.#pending.close();
+      this.#pending = null;
     }
   }
 }
 
-export function createStereoPanel(configuration) {
-  return new StereoPanel(configuration);
+export function createCameraPanel(configuration) {
+  return new CameraPanel(configuration);
 }
