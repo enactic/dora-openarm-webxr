@@ -131,6 +131,11 @@ joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
 included in a `frame` message.
 
+Controller poses are compensated for the headset tilt: the head pitch
+and roll are cancelled every frame so the mapping stays gravity-aligned,
+while the headset yaw and position are still followed. Frames that do
+not include a headset pose are published uncompensated.
+
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `status`           | `string`          | `"ready"` when a WebXR session is started.                                                                                                      |

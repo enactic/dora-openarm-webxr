@@ -95,7 +95,7 @@ if (navigator.xr) {
     };
     websocket.send(JSON.stringify(response));
   }
-  function sendFrame(session, space, time, frame) {
+  function sendFrame(session, space, localSpace, time, frame) {
     if (session.inputSources.length < 2) {
       return;
     }
@@ -103,6 +103,18 @@ if (navigator.xr) {
       type: "frame",
       time: time,
     };
+    const viewerPose = frame.getViewerPose(localSpace);
+    if (viewerPose) {
+      response.pose_head = {
+        x: viewerPose.transform.position.x,
+        y: viewerPose.transform.position.y,
+        z: viewerPose.transform.position.z,
+        qx: viewerPose.transform.orientation.x,
+        qy: viewerPose.transform.orientation.y,
+        qz: viewerPose.transform.orientation.z,
+        qw: viewerPose.transform.orientation.w,
+      };
+    }
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
         continue;
@@ -177,13 +189,17 @@ if (navigator.xr) {
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
     stereoPanel.attach(gl);
 
-    session
-      // We send relative position from viewer to the dora-rs node.
-      .requestReferenceSpace("viewer")
-      .then((space) => {
+    Promise.all([
+      // We send relative position from viewer to the dora-rs node. The
+      // local space gives the headset pose so the server can cancel the
+      // head tilt from the relative poses.
+      session.requestReferenceSpace("viewer"),
+      session.requestReferenceSpace("local"),
+    ])
+      .then(([space, localSpace]) => {
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
-          sendFrame(session, space, time, frame);
+          sendFrame(session, space, localSpace, time, frame);
           stereoPanel.render(session, space, frame);
           session.requestAnimationFrame(onFrame);
         }
