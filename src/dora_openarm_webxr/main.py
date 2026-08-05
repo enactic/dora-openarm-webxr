@@ -91,22 +91,6 @@ def _head_tilt_compensation(head_rotation: Rotation) -> Rotation | None:
     return Rotation.from_euler("y", yaw).inv() * head_rotation
 
 
-# Bound how fast the compensation may change so that the yaw branch
-# flip at the gaze pole, a pose_head dropout snapping back, or yaw
-# noise near vertical can never step the arm target. The residual
-# carries no yaw, so real head pitch and roll stay far below this.
-_MAX_COMPENSATION_STEP = np.deg2rad(4.0)
-
-
-def _limit_compensation_step(previous: Rotation, target: Rotation) -> Rotation:
-    """Rotate ``previous`` toward ``target`` by at most the step limit."""
-    delta = (target * previous.inv()).as_rotvec()
-    angle = np.linalg.norm(delta)
-    if angle <= _MAX_COMPENSATION_STEP:
-        return target
-    return Rotation.from_rotvec(delta * (_MAX_COMPENSATION_STEP / angle)) * previous
-
-
 app = FastAPI()
 
 
@@ -212,9 +196,7 @@ async def _websocket_endpoint(websocket: WebSocket):
                     )
                     new_compensation = _head_tilt_compensation(head_rotation)
                     if new_compensation is not None:
-                        compensation = _limit_compensation_step(
-                            compensation, new_compensation
-                        )
+                        compensation = new_compensation
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
