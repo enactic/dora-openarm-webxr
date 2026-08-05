@@ -100,6 +100,9 @@ their `view` key:
   [`example/zed_view_parameters.py`](example/zed_view_parameters.py)
   works its camera and alignment parameters out from a ZED camera's
   factory calibration.
+- [`example/head_cam_view_none.yaml`](example/head_cam_view_none.yaml)
+  — the `none` view: no camera at all; the operator sees the
+  passthrough and only the controller poses are used.
 
 ## Debug
 
@@ -123,12 +126,6 @@ This dora-rs node outputs the following data. Pose, trigger and
 joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
 included in a `frame` message.
-
-Controller poses are read in the WebXR `local` reference space:
-gravity-aligned, world-fixed axes anchored at the headset pose when the
-session starts. Head motion therefore does not move the published
-poses; recentering the headset re-anchors the space, which acts as a
-re-calibration.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|

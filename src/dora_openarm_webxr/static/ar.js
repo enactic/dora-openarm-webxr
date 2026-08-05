@@ -40,11 +40,13 @@ if (navigator.xr) {
     .then((loaded) => {
       configuration = loaded;
       // The default fixed view hangs one image in the room; the stereo
-      // view locks one image per eye to the operator's head.
-      cameraPanel =
-        configuration.view === "stereo"
-          ? createStereoPanel(configuration)
-          : createCameraPanel(configuration);
+      // view locks one image per eye to the operator's head; "none"
+      // shows no camera at all.
+      if (configuration.view === "stereo") {
+        cameraPanel = createStereoPanel(configuration);
+      } else if (configuration.view !== "none") {
+        cameraPanel = createCameraPanel(configuration);
+      }
       return configuration;
     });
 
@@ -201,29 +203,31 @@ if (navigator.xr) {
     session.addEventListener("squeeze", onSqueeze);
     session.addEventListener("squeezeend", onSqueezeEnd);
 
-    // The render state is needed to use immersive AR. We draw the head
-    // camera into it as a panel fixed in the room.
+    // The render state is needed to use immersive AR even when nothing
+    // is drawn into it. The camera views draw their panel into it.
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl", { xrCompatible: true });
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
-    cameraPanel.attach(gl);
+    if (cameraPanel) {
+      cameraPanel.attach(gl);
+    }
 
     Promise.all([
-      // The hand poses always live in the world-fixed local space,
-      // whose origin is the headset pose when the session starts, so
-      // head motion does not move them. The panel lives there too when
-      // fixed in the room, but in the viewer space when head-locked
-      // (stereo view).
-      session.requestReferenceSpace("local"),
+      // We send relative position from viewer to the dora-rs node.
+      // Only the fixed view uses the world-fixed local space, to hang
+      // its panel in the room; the hand poses never do.
       session.requestReferenceSpace("viewer"),
+      session.requestReferenceSpace("local"),
     ])
-      .then(([localSpace, viewerSpace]) => {
+      .then(([viewerSpace, localSpace]) => {
         const panelSpace =
-          configuration.view === "stereo" ? viewerSpace : localSpace;
+          configuration.view === "fixed" ? localSpace : viewerSpace;
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
-          sendFrame(session, localSpace, time, frame);
-          cameraPanel.render(session, panelSpace, frame);
+          sendFrame(session, viewerSpace, time, frame);
+          if (cameraPanel) {
+            cameraPanel.render(session, panelSpace, frame);
+          }
           session.requestAnimationFrame(onFrame);
         }
         session.requestAnimationFrame(onFrame);

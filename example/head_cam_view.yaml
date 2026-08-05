@@ -14,8 +14,9 @@
 
 # Head camera panel in the VR device: one image fixed in the room.
 #
-# For the head-locked stereo view instead, point
-# VIEW_CONFIGURATION_FILE at head_cam_view_stereo.yaml.
+# For the head-locked stereo view, point VIEW_CONFIGURATION_FILE at
+# head_cam_view_stereo.yaml instead; for no camera at all, at
+# head_cam_view_none.yaml.
 #
 # Read on every request, so edit and reload the page to apply.
 
@@ -41,4 +42,4 @@ pose:
   # Neutral hand position relative to the arm_origin site (chest
   # level), in meters. Unlike the sections above, read once at node
   # startup, so restart the dataflow to apply.
-  frame_offset: [-0.1, 0.0, 0.23]
+  frame_offset: [-0.085, 0.0, -0.14]

@@ -64,9 +64,8 @@ _ROBOT_ROTATION_MATRIX: np.ndarray = np.array(
 )
 _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 
-# Poses arrive in the WebXR local space: gravity-aligned, with the
-# origin at the headset pose when the session starts, so head motion
-# does not move them. We need to move them to OpenArm position.
+# Relative pose is computed from viewer.
+# We need to move it to OpenArm position.
 #
 # Neutral hand position relative to the arm_origin site (chest level).
 # Overridden by ``pose: frame_offset`` in the view configuration file.
