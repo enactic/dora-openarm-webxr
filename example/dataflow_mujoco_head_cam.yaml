@@ -53,10 +53,10 @@ nodes:
       # Keeps the view on the newest frame. Without it, frames the VR
       # device cannot keep up with queue and latency grows.
       camera_head_left:
-        source: mujoco/camera_head_right # currenty openarm_mujoco head cam is flipped
+        source: mujoco/camera_head_right # currently openarm_mujoco head cam is flipped
         queue_size: 1
       camera_head_right:
-        source: mujoco/camera_head_left # currenty openarm_mujoco head cam is flipped
+        source: mujoco/camera_head_left # currently openarm_mujoco head cam is flipped
         queue_size: 1
     outputs:
       - pose_right
