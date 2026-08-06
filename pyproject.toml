@@ -25,7 +25,7 @@ dependencies = [
   "dora-rs >= 0.5.0",
   "fastapi",
   "pyyaml",
-  "scipy"
+  "scipy",
   "uvicorn",
   "websockets",
 ]
