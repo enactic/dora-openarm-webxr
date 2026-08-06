@@ -81,7 +81,9 @@ forwards them to the VR device, where they are drawn on a panel fixed
 in the room: straight ahead of where the headset was when the session
 started, at eye height. Both eyes see the same image, and the panel
 stays put when the operator moves their head. See
-[`example/dataflow_mujoco_head_cam.yaml`](example/dataflow_mujoco_head_cam.yaml).
+[`example/dataflow_mujoco_camera.yaml`](example/dataflow_mujoco_camera.yaml)
+and
+[`example/dataflow_mujoco_camera_stereo.yaml`](example/dataflow_mujoco_camera_stereo.yaml).
 
 How the panel is drawn is described by a view configuration file,
 passed with `--view-configuration-file`. The node reads it once when
