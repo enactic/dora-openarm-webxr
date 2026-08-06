@@ -47,7 +47,6 @@ nodes:
     env:
       TLS_CERTIFICATE_FILE: "server.crt"
       TLS_KEY_FILE: "server.key"
-      VIEW_CONFIGURATION_FILE: "head_cam_view.yaml"
     inputs:
       tick: quittable-tick-leader/tick
     outputs:
@@ -71,7 +70,6 @@ nodes:
     path: dora-openarm-ik
     args: "--mode bimanual --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01"
     inputs:
-      tick: quittable-tick-leader/tick
       target_right: webxr/pose_right
       target_left: webxr/pose_left
       trigger_right: webxr/trigger_right
