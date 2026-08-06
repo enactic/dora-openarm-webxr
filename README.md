@@ -88,11 +88,11 @@ passed with `--view-configuration-file`. The node reads it once when
 it starts, so restart the dataflow to apply a change. The example
 files select the view with their `view` key:
 
-- [`example/head_cam_view.yaml`](example/head_cam_view.yaml) — the
+- [`example/view_camera.yaml`](example/view_camera.yaml) — the
   default `fixed` view above. Parameters: the session mode, the panel
   distance and the panel width (the height follows the image aspect
   ratio).
-- [`example/head_cam_view_stereo.yaml`](example/head_cam_view_stereo.yaml)
+- [`example/view_camera_stereo.yaml`](example/view_camera_stereo.yaml)
   — the `stereo` view: one image per eye on a head-locked panel, for a
   side-by-side stereo camera such as a ZED Mini. It also needs the
   `camera_head_left` input, and

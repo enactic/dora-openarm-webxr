@@ -15,7 +15,7 @@
 # Head camera panel in the VR device: one image fixed in the room.
 #
 # For the head-locked stereo view, point VIEW_CONFIGURATION_FILE at
-# head_cam_view_stereo.yaml instead; "view: none" shows no camera at
+# view_camera_stereo.yaml instead; "view: none" shows no camera at
 # all.
 #
 # Read once when the node starts, so restart the dataflow to apply.

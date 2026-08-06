@@ -20,7 +20,7 @@ teleoperating. The image is drawn on a panel fixed in the room.
 
 Frames go on their own WebSocket so they never delay the pose messages
 that feed IK. How the panel is placed is tuned in
-``example/head_cam_view.yaml``.
+``example/view_camera.yaml``.
 """
 
 import argparse

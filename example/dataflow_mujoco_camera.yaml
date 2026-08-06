@@ -1,0 +1,158 @@
+# Copyright 2026 Enactic, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+nodes:
+  - id: ui
+    build: pip install dora-openarm-data-collection-ui
+    path: dora-openarm-data-collection-ui
+    env:
+      METADATA_FILE: "metadata_mujoco.yaml"
+    inputs:
+      tick: dora/timer/secs/1
+      button_a:
+        source: quittable-webxr/button_a
+        queue_size: 100
+      button_b:
+        source: quittable-webxr/button_b
+        queue_size: 100
+      vr_receive_times:
+        source: quittable-webxr/vr_receive_times
+        queue_size: 100
+    outputs:
+      - command
+
+  - id: webxr
+    build: pip install -e ..
+    path: dora-openarm-webxr
+    env:
+      TLS_CERTIFICATE_FILE: "server.crt"
+      TLS_KEY_FILE: "server.key"
+      # Fixes one image in the room.
+      VIEW_CONFIGURATION_FILE: "view_camera.yaml"
+    inputs:
+      # Keeps the view on the newest frame. Without it, frames the VR
+      # device cannot keep up with queue and latency grows.
+      camera_head_right:
+        source: mujoco/camera_head_right
+        queue_size: 1
+      # Only used by the stereo view. Swap the two sources if your
+      # openarm_mujoco build still has the head cameras flipped.
+      camera_head_left:
+        source: mujoco/camera_head_left
+        queue_size: 1
+    outputs:
+      - pose_right
+      - trigger_right
+      - pose_left
+      - trigger_left
+      - joystick_x_right
+      - joystick_y_right
+      - joystick_x_left
+      - joystick_y_left
+      - button_a
+      - button_b
+      - button_x
+      - button_y
+      - status
+      - vr_receive_times
+
+  - id: quittable-webxr
+    build: pip install dora-openarm-quitter
+    path: dora-openarm-quitter
+    inputs:
+      command: ui/command
+      pose_right: webxr/pose_right
+      trigger_right: webxr/trigger_right
+      pose_left: webxr/pose_left
+      trigger_left: webxr/trigger_left
+      joystick_x_right: webxr/joystick_x_right
+      joystick_y_right: webxr/joystick_y_right
+      joystick_x_left: webxr/joystick_x_left
+      joystick_y_left: webxr/joystick_y_left
+      button_a: webxr/button_a
+      button_b: webxr/button_b
+      button_x: webxr/button_x
+      button_y: webxr/button_y
+      status: webxr/status
+      vr_receive_times: webxr/vr_receive_times
+    outputs:
+      - pose_right
+      - trigger_right
+      - pose_left
+      - trigger_left
+      - joystick_x_right
+      - joystick_y_right
+      - joystick_x_left
+      - joystick_y_left
+      - button_a
+      - button_b
+      - button_x
+      - button_y
+      - status
+      - vr_receive_times
+
+  - id: ik
+    build: pip install dora-openarm-kinematics
+    path: dora-openarm-ik
+    args: "--mode bimanual --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01"
+    inputs:
+      target_right: quittable-webxr/pose_right
+      target_left: quittable-webxr/pose_left
+      trigger_right: quittable-webxr/trigger_right
+      trigger_left: quittable-webxr/trigger_left
+    outputs:
+      - position_left
+      - position_right
+      - status
+
+  - id: mujoco
+    build: pip install dora-openarm-mujoco
+    path: dora-openarm-mujoco
+    args: "--scene demo --keyframe home --enable-collision --ctrl --viewer --render --debug-frames"
+    # env:
+    #   DISPLAY: ":1" # needed when running headless with Xvfb
+    inputs:
+      position_right: ik/position_right
+      position_left: ik/position_left
+      pose_right: quittable-webxr/pose_right
+      pose_left: quittable-webxr/pose_left
+      joystick_y: quittable-webxr/joystick_y_left
+      button_x: quittable-webxr/button_x
+    outputs:
+      - status
+      - arm_right_observation
+      - arm_left_observation
+      - camera_wrist_right
+      - camera_wrist_left
+      - camera_head_left
+      - camera_head_right
+      - camera_ceiling
+
+  - id: recorder
+    build: pip install dora-openarm-dataset-recorder
+    path: dora-openarm-dataset-recorder
+    env:
+      METADATA_FILE: "metadata_mujoco.yaml"
+      DIRECTORY: "dataset_mujoco"
+    inputs:
+      command: ui/command
+      arm_right_action: ik/position_right
+      arm_right_observation: mujoco/arm_right_observation
+      arm_left_action: ik/position_left
+      arm_left_observation: mujoco/arm_left_observation
+      camera_wrist_right: mujoco/camera_wrist_right
+      camera_wrist_left: mujoco/camera_wrist_left
+      camera_head_left: mujoco/camera_head_left
+      camera_head_right: mujoco/camera_head_right
+      camera_ceiling: mujoco/camera_ceiling

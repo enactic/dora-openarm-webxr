@@ -16,7 +16,7 @@
 
 """Suggest head camera view parameters for a ZED camera.
 
-Prints a view configuration such as ``head_cam_view.yaml``, worked out
+Prints a view configuration such as ``view_camera.yaml``, worked out
 from the camera's calibration instead of guessed at.
 
 The node reads the camera over plain video capture, not the ZED SDK, so

@@ -15,7 +15,7 @@
 # Head camera stereo panel in the VR device: one image per eye, locked
 # to the operator's head. Needs both the camera_head_left and
 # camera_head_right inputs. For the default room-fixed view, point
-# VIEW_CONFIGURATION_FILE at head_cam_view.yaml instead.
+# VIEW_CONFIGURATION_FILE at view_camera.yaml instead.
 #
 # Read once when the node starts, so restart the dataflow to apply.
 #
