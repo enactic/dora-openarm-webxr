@@ -132,9 +132,22 @@ if (navigator.xr) {
     if (session.inputSources.length < 2) {
       return;
     }
+    const viewerPose = frame.getViewerPose(space);
+    if (!viewerPose) {
+      return;
+    }
     const response = {
       type: "frame",
       time: time,
+      pose_reference: {
+        x: viewerPose.transform.position.x,
+        y: viewerPose.transform.position.y,
+        z: viewerPose.transform.position.z,
+        qx: viewerPose.transform.orientation.x,
+        qy: viewerPose.transform.orientation.y,
+        qz: viewerPose.transform.orientation.z,
+        qw: viewerPose.transform.orientation.w,
+      },
     };
     for (const source of session.inputSources) {
       if (source.handedness === "none") {
@@ -213,9 +226,11 @@ if (navigator.xr) {
     }
 
     Promise.all([
-      // We send relative position from viewer to the dora-rs node.
-      // Only the fixed view uses the world-fixed local space, to hang
-      // its panel in the room; the hand poses never do.
+      // The hand poses are read in the world-fixed local space and
+      // sent along with the viewer pose in that same space, so the
+      // node can make the position relative to the head without
+      // inheriting the head rotation. The stereo view locks its panel
+      // to the viewer space; the fixed view hangs it in the room.
       session.requestReferenceSpace("viewer"),
       session.requestReferenceSpace("local"),
     ])
@@ -224,7 +239,7 @@ if (navigator.xr) {
           configuration.view === "fixed" ? localSpace : viewerSpace;
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
-          sendFrame(session, viewerSpace, time, frame);
+          sendFrame(session, localSpace, time, frame);
           if (cameraPanel) {
             cameraPanel.render(session, panelSpace, frame);
           }

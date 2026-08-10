@@ -23,7 +23,9 @@ state as dora-rs outputs.
 
 The published poses are expressed in the scene's ``arm_origin`` site
 frame (chest-level origin between the arms), not in world coordinates.
-Downstream IK interprets targets in the same frame.
+Downstream IK interprets targets in the same frame. The hand position
+is relative to the headset but keeps the world axes, so looking around
+does not drag the target with the head.
 
 The Web server and the dora-rs event loop run concurrently in a single
 asyncio event loop; the server shuts down when the dora-rs node
@@ -64,7 +66,7 @@ _ROBOT_ROTATION_MATRIX: np.ndarray = np.array(
 )
 _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 
-# Relative pose is computed from viewer.
+# Relative pose is computed from the viewer position.
 # We need to move it to OpenArm position.
 #
 # Neutral hand position relative to the arm_origin site (chest level).
@@ -83,8 +85,15 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
         return (1.57 / 2.0) * (1.0 - trigger)  # 0-> 1.57, 1->0
 
 
-def _adjust_pose(pose, smoother, smoother_time):
+def _adjust_pose(pose, reference, smoother, smoother_time):
     """Convert WebXR style pose to our style.
+
+    ``pose`` and ``reference`` (the viewer pose) are in the same
+    world-fixed reference space. Only the position is made relative to
+    the viewer, by subtracting it in the world axes. The viewer
+    rotation is never applied: turning the head must not move the
+    target. The controller orientation is passed through as its world
+    orientation for the same reason.
 
     WebXR style:
       * right-handed
@@ -102,7 +111,14 @@ def _adjust_pose(pose, smoother, smoother_time):
       * right-handed
       * [x, y, z, qw, qx, qy, qz]
     """
-    position = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32)
+    position = np.array(
+        [
+            pose["x"] - reference["x"],
+            pose["y"] - reference["y"],
+            pose["z"] - reference["z"],
+        ],
+        dtype=np.float32,
+    )
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
     # TODO: Add a comment why we need this
@@ -164,13 +180,14 @@ async def _websocket_endpoint(websocket: WebSocket):
                             pa.array([bool(response[name])], type=pa.bool_()),
                             metadata,
                         )
+                reference = response.get("pose_reference")
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
-                    if pose in response and trigger in response:
+                    if pose in response and trigger in response and reference:
                         smoother = smoothers[side]
                         adjusted_pose = _adjust_pose(
-                            response[pose], smoother, smoother_time
+                            response[pose], reference, smoother, smoother_time
                         )
                         gripper_angle = _map_trigger_to_gripper(response[trigger], side)
                         gripper_array = np.array([gripper_angle], dtype=np.float32)
