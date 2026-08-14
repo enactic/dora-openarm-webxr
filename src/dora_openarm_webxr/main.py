@@ -77,6 +77,21 @@ _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 # Overridden by ``pose: frame_offset`` in the view configuration file.
 _FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
 
+# The controller orientation arrives in the WebXR grip space, whose -Z axis runs
+# along the handle toward the thumb and whose X axis is the palm normal. This
+# turn maps that frame onto the end effector one, which points the gripper along
+# its own -z and opens it across y.
+_GRIP_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
+
+# A natural grip does not hold the handle level. Measured on the device in a
+# normal teleoperation posture, both handles sat 45 degrees above the horizontal,
+# and since the gripper follows the handle it pointed that far up. Pitch the
+# frame back down by the same amount around the palm normal, so a natural grip
+# gives a level gripper. The Unity sender never needed this: it sent the OVR
+# controller anchor, whose forward axis points where the controller points
+# rather than along the handle.
+_GRIP_TILT: Rotation = Rotation.from_euler("x", -45, degrees=True)
+
 
 app = FastAPI()
 
@@ -125,9 +140,7 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     )
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
-    # TODO: Add a comment why we need this
-    rotation_fix = Rotation.from_euler("z", 90, degrees=True)
-    rotation = _ROBOT_ROTATION * rotation * rotation_fix
+    rotation = _ROBOT_ROTATION * rotation * _GRIP_TILT * _GRIP_TO_EE
     quaternion = rotation.as_quat()
 
     adjusted_pose = np.array(
@@ -153,7 +166,7 @@ _DEBUG_POSE = os.environ.get("DORA_WEBXR_DEBUG_POSE") == "1"
 _debug_pose_next = {"right": 0.0, "left": 0.0}
 
 
-def _debug_log_pose(side: str, pose: dict, now: float) -> None:
+def _debug_log_pose(side: str, pose: dict, reference: dict, now: float) -> None:
     if not _DEBUG_POSE or now < _debug_pose_next[side]:
         return
     _debug_pose_next[side] = now + 1.0
@@ -162,9 +175,12 @@ def _debug_log_pose(side: str, pose: dict, now: float) -> None:
     # z back). The gripper points along the end effector -z in the robot frame
     # (x forward, y left, z up).
     grip = rotation.as_matrix()
-    approach = -(
-        _ROBOT_ROTATION * rotation * Rotation.from_euler("z", 90, degrees=True)
-    ).as_matrix()[:, 2]
+    approach = -(_ROBOT_ROTATION * rotation * _GRIP_TILT * _GRIP_TO_EE).as_matrix()[
+        :, 2
+    ]
+    head = np.array([reference["x"], reference["y"], reference["z"]])
+    hand = np.array([pose["x"], pose["y"], pose["z"]])
+    robot = _ROBOT_ROTATION.apply(hand - head) + _FRAME_OFFSET_CELL
 
     def _line(name, vector, up):
         elevation = np.degrees(np.arcsin(float(np.clip(vector[up], -1.0, 1.0))))
@@ -174,6 +190,10 @@ def _debug_log_pose(side: str, pose: dict, now: float) -> None:
         "\n".join(
             [
                 f"[pose-debug] {side}",
+                f"  head   (WebXR)         = {np.round(head, 3)}",
+                f"  hand   (WebXR)         = {np.round(hand, 3)}",
+                f"  hand - head            = {np.round(hand - head, 3)}",
+                f"  robot position         = {np.round(robot, 3)}",
                 _line("grip +X (palm normal) ", grip[:, 0], 1),
                 _line("grip +Y               ", grip[:, 1], 1),
                 _line("grip -Z (thumb/handle)", -grip[:, 2], 1),
@@ -267,7 +287,7 @@ async def _websocket_endpoint(websocket: WebSocket):
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
                     if pose in response and trigger in response and reference:
-                        _debug_log_pose(side, response[pose], smoother_time)
+                        _debug_log_pose(side, response[pose], reference, smoother_time)
                         smoother = smoothers[side]
                         adjusted_pose = _adjust_pose(
                             response[pose], reference, smoother, smoother_time
