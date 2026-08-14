@@ -276,11 +276,18 @@ async def _websocket_endpoint(websocket: WebSocket):
                             pa.array([response[trigger]], type=pa.float32()),
                             metadata,
                         )
+                    grip = f"grip_{side}"
+                    if grip in response:
+                        node.send_output(
+                            grip,
+                            pa.array([response[grip]], type=pa.float32()),
+                            metadata,
+                        )
                     joystick = f"joystick_{side}"
                     if joystick in response:
                         axes = response[joystick]
-                        x = axes[1] - axes[3]
-                        y = axes[2] - axes[0]
+                        x, y = (axes[2], axes[3]) if len(axes) >= 4 else axes[:2]
+                        y = -y
                         node.send_output(
                             f"joystick_x_{side}",
                             pa.array([x], type=pa.float32()),

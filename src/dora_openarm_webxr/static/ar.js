@@ -179,6 +179,11 @@ if (navigator.xr) {
         ) {
           const trigger = gamepad.buttons[0];
           response[`trigger${suffix}`] = trigger.value;
+
+          const grip = gamepad.buttons[1];
+          if (grip) {
+            response[`grip${suffix}`] = grip.value;
+          }
           if (source.handedness === "right") {
             const a = gamepad.buttons[4];
             const b = gamepad.buttons[5];
@@ -191,13 +196,8 @@ if (navigator.xr) {
             response.button_y = y.pressed;
           }
         }
-        if (
-          gamepad.axes[0] &&
-          gamepad.axes[1] &&
-          gamepad.axes[2] &&
-          gamepad.axes[3]
-        ) {
-          response[`joystick${suffix}`] = gamepad.axes;
+        if (gamepad.axes.length >= 2) {
+          response[`joystick${suffix}`] = Array.from(gamepad.axes);
         }
       }
     }
