@@ -130,7 +130,9 @@ only needed to show a head camera in the VR device.
 This dora-rs node outputs the following data. Pose, trigger and
 joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
-included in a `frame` message.
+included in a `frame` message. `pose_reference` is sent whenever the
+headset is tracked, even while the controllers are off, and the
+controller poses are sent only when it is.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -138,6 +140,7 @@ included in a `frame` message.
 | `vr_receive_times` | `int64`           | The timestamp in nanoseconds when a frame is received from the VR device.                                                                       |
 | `pose_right`       | `float32[7]`      | The pose of the right controller as `[x, y, z, qw, qx, qy, qz]`, expressed in the scene's `arm_origin` site frame. Position is in meters and orientation is a quaternion. |
 | `pose_left`        | `float32[7]`      | The pose of the left controller. The format is the same as `pose_right`.                                                                        |
+| `pose_reference`   | `float32[7]`      | The pose of the headset, in the WebXR reference space (x right, y up, -z forward). The hand poses are made relative to this pose, so it is unrotated and unsmoothed and left in the WebXR frame for consumers that drive something from head motion such as a neck. |
 | `trigger_right`    | `float32`         | The value of the right trigger from `0.0` (released) to `1.0` (fully pressed).                                                                  |
 | `trigger_left`     | `float32`         | The value of the left trigger from `0.0` (released) to `1.0` (fully pressed).                                                                   |
 | `joystick_x_right` | `float32`         | The X axis value of the right joystick.                                                                                                         |

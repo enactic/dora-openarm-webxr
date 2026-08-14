@@ -64,6 +64,7 @@ nodes:
       - button_y
       - status
       - vr_receive_times
+      - pose_reference
 
   - id: ik
     build: pip install dora-openarm-kinematics

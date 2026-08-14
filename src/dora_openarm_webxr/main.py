@@ -27,6 +27,10 @@ Downstream IK interprets targets in the same frame. The hand position
 is relative to the headset but keeps the world axes, so looking around
 does not drag the target with the head.
 
+The headset pose that the hands are made relative to is published as
+is on ``pose_reference``, in the WebXR reference space, for consumers
+that drive something from head motion such as a neck.
+
 The Web server and the dora-rs event loop run concurrently in a single
 asyncio event loop; the server shuts down when the dora-rs node
 receives a ``STOP`` event.
@@ -141,12 +145,84 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     return pa.array(smoother.smooth(smoother_time, adjusted_pose))
 
 
+# --- TEMPORARY DIAGNOSTIC ---------------------------------------------------
+# Set DORA_WEBXR_DEBUG_POSE=1 to print, once a second per hand, the WebXR grip
+# frame and the gripper axis it produces, so the rotation convention can be
+# measured on the device. Remove once the rotation is settled.
+_DEBUG_POSE = os.environ.get("DORA_WEBXR_DEBUG_POSE") == "1"
+_debug_pose_next = {"right": 0.0, "left": 0.0}
+
+
+def _debug_log_pose(side: str, pose: dict, now: float) -> None:
+    if not _DEBUG_POSE or now < _debug_pose_next[side]:
+        return
+    _debug_pose_next[side] = now + 1.0
+    rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
+    # Columns are the grip axes in the WebXR reference space (x right, y up,
+    # z back). The gripper points along the end effector -z in the robot frame
+    # (x forward, y left, z up).
+    grip = rotation.as_matrix()
+    approach = -(
+        _ROBOT_ROTATION * rotation * Rotation.from_euler("z", 90, degrees=True)
+    ).as_matrix()[:, 2]
+
+    def _line(name, vector, up):
+        elevation = np.degrees(np.arcsin(float(np.clip(vector[up], -1.0, 1.0))))
+        return f"  {name} = {np.round(vector, 3)} elevation {elevation:+6.1f} deg"
+
+    print(
+        "\n".join(
+            [
+                f"[pose-debug] {side}",
+                _line("grip +X (palm normal) ", grip[:, 0], 1),
+                _line("grip +Y               ", grip[:, 1], 1),
+                _line("grip -Z (thumb/handle)", -grip[:, 2], 1),
+                _line("gripper approach      ", approach, 2),
+            ]
+        ),
+        flush=True,
+    )
+
+
+# ----------------------------------------------------------------------------
+
+
 _POSE_STRUCT_TYPE = pa.struct({"pose": pa.list_(pa.float32())})
 
 
 def _build_pose_output(pose: np.ndarray) -> pa.Array:
     """Wrap a pose array as a length-1 StructArray: [{"pose": [...]}]."""
     return pa.array([{"pose": pose}], type=_POSE_STRUCT_TYPE)
+
+
+def _build_head_pose_output(pose: dict) -> pa.Array:
+    """Wrap the headset pose, in our style: [x, y, z, qw, qx, qy, qz].
+
+    Unrotated, unlike the hands. `_adjust_pose` applies `_ROBOT_ROTATION` and a
+    z+90 fix to put a controller where the arm expects its end effector; both
+    are arm conventions and neither means anything on a head. Consumers map the
+    WebXR frame (x right, y up, -z forward) into their own body frame, so the
+    rig's wiring stays in the consumer's config rather than baked in here.
+
+    Not made relative either: the hand positions are relative to this pose, so
+    subtracting it from itself would leave nothing to read the head from.
+
+    Not smoothed either: the One Euro smoothers are per-hand and stateful, and
+    a neck has its own rate limiting downstream.
+    """
+    head_pose = np.array(
+        [
+            pose["x"],
+            pose["y"],
+            pose["z"],
+            pose["qw"],
+            pose["qx"],
+            pose["qy"],
+            pose["qz"],
+        ],
+        dtype=np.float32,
+    )
+    return _build_pose_output(head_pose)
 
 
 @app.websocket("/websocket")
@@ -172,6 +248,13 @@ async def _websocket_endpoint(websocket: WebSocket):
                     pa.array([metadata["timestamp"]], type=pa.int64()),
                     metadata,
                 )
+                reference = response.get("pose_reference")
+                if reference:
+                    node.send_output(
+                        "pose_reference",
+                        _build_head_pose_output(reference),
+                        metadata,
+                    )
                 for button in ["a", "b", "x", "y"]:
                     name = f"button_{button}"
                     if name in response:
@@ -180,11 +263,11 @@ async def _websocket_endpoint(websocket: WebSocket):
                             pa.array([bool(response[name])], type=pa.bool_()),
                             metadata,
                         )
-                reference = response.get("pose_reference")
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
                     if pose in response and trigger in response and reference:
+                        _debug_log_pose(side, response[pose], smoother_time)
                         smoother = smoothers[side]
                         adjusted_pose = _adjust_pose(
                             response[pose], reference, smoother, smoother_time

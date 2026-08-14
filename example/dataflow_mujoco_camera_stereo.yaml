@@ -66,6 +66,7 @@ nodes:
       - button_y
       - status
       - vr_receive_times
+      - pose_reference
 
   - id: quittable-webxr
     build: pip install dora-openarm-quitter
@@ -86,6 +87,7 @@ nodes:
       button_y: webxr/button_y
       status: webxr/status
       vr_receive_times: webxr/vr_receive_times
+      pose_reference: webxr/pose_reference
     outputs:
       - pose_right
       - trigger_right
@@ -101,6 +103,7 @@ nodes:
       - button_y
       - status
       - vr_receive_times
+      - pose_reference
 
   - id: ik
     build: pip install dora-openarm-kinematics
