@@ -77,20 +77,29 @@ _ROBOT_ROTATION = Rotation.from_matrix(_ROBOT_ROTATION_MATRIX)
 # Overridden by ``pose: frame_offset`` in the view configuration file.
 _FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
 
-# The controller orientation arrives in the WebXR grip space, whose -Z axis runs
-# along the handle toward the thumb and whose X axis is the palm normal. This
-# turn maps that frame onto the end effector one, which points the gripper along
-# its own -z and opens it across y.
-_GRIP_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
+# WebXR reports the OpenXR grip pose, whose -Z runs along the handle toward the
+# thumb. Everything below it here -- the _ROBOT_ROTATION frame and the turn onto
+# the end effector axes -- was carried over from the Unity sender, which
+# published the controller pose in the old Oculus convention instead. The two
+# are one fixed rigid transform apart, shipped by Epic as the Unreal legacy pose
+# restore and independently reproduced for Unity by BeatSaberOffsetMigrator:
+#
+#     gripRot = ovrRot * OvrToGripRot
+#     gripPos = ovrPos + ovrRot * OvrToGripPos
+#
+# with OvrToGripRot = Euler(-60, 0, 0) and OvrToGripPos = (0, -0.03, -0.04) in
+# Unity's left-handed axes, which flip to a 60 degree turn about +X and an
+# offset 3 cm down and 4 cm back in the right-handed axes used here. Undo it, so
+# the constants below receive the pose they were tuned for. This is a runtime
+# convention rather than a measurement: it does not move with the operator, and
+# it only changes if the headset runtime changes what it reports.
+_OVR_TO_GRIP: Rotation = Rotation.from_euler("x", 60, degrees=True)
+_OVR_TO_GRIP_POS: np.ndarray = np.array([0.0, -0.03, 0.04], dtype=np.float32)
 
-# A natural grip does not hold the handle level. Measured on the device in a
-# normal teleoperation posture, both handles sat 45 degrees above the horizontal,
-# and since the gripper follows the handle it pointed that far up. Pitch the
-# frame back down by the same amount around the palm normal, so a natural grip
-# gives a level gripper. The Unity sender never needed this: it sent the OVR
-# controller anchor, whose forward axis points where the controller points
-# rather than along the handle.
-_GRIP_TILT: Rotation = Rotation.from_euler("x", -45, degrees=True)
+# The Oculus controller pose points its forward axis where the controller
+# points. This turn maps that frame onto the end effector one, which points the
+# gripper along its own -z and opens it across y.
+_CONTROLLER_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
 
 
 app = FastAPI()
@@ -113,6 +122,10 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     rotation is never applied: turning the head must not move the
     target. The controller orientation is passed through as its world
     orientation for the same reason.
+
+    The controller pose itself is converted from the WebXR grip space to
+    the Oculus convention first, so that the robot frame constants get
+    the pose the Unity sender they came from used to give them.
 
     WebXR style:
       * right-handed
@@ -138,9 +151,14 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
         ],
         dtype=np.float32,
     )
-    position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
-    rotation = _ROBOT_ROTATION * rotation * _GRIP_TILT * _GRIP_TO_EE
+
+    # Back out of the grip pose to the Oculus one the robot constants expect.
+    rotation = rotation * _OVR_TO_GRIP.inv()
+    position = position - rotation.apply(_OVR_TO_GRIP_POS)
+
+    position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
+    rotation = _ROBOT_ROTATION * rotation * _CONTROLLER_TO_EE
     quaternion = rotation.as_quat()
 
     adjusted_pose = np.array(
