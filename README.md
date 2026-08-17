@@ -109,6 +109,14 @@ Both files also take `pose.frame_offset`: the neutral hand position
 relative to the `arm_origin` site in meters, overriding the built-in
 default of `[-0.085, 0, -0.14]`.
 
+They also take `pose.neck_pivot_offset`: the operator's eyes to the
+neck's rotation axis, in the headset's own frame, overriding the
+built-in default of `[0.0, -0.075, 0.080]`. Hand positions are made
+relative to that pivot rather than to the headset itself, so turning the
+head does not swing the target along the arc the headset travels.
+Anatomy varies, so tune it per operator; `[0, 0, 0]` goes back to
+subtracting the headset position.
+
 ## Debug
 
 You can use [Immersive Web

@@ -65,3 +65,10 @@ pose:
   # Neutral hand position relative to the arm_origin site (chest
   # level), in meters.
   frame_offset: [-0.1, 0.0, 0.23]
+
+  # Eyes to the neck's rotation axis, in the headset's own frame
+  # (-z forward, +y up), in meters. The hand positions are made relative
+  # to this pivot rather than to the headset, so a head turn does not
+  # swing the target along the arc the headset travels. Tune per
+  # operator; [0, 0, 0] subtracts the headset position itself.
+  neck_pivot_offset: [0.0, -0.075, 0.080]

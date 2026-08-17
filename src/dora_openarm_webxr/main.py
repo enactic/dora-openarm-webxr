@@ -90,6 +90,28 @@ _FRAME_OFFSET_CELL: np.ndarray = np.array([-0.085, 0, -0.14], dtype=np.float32)
 # gripper along its own -z and opens it across y.
 _CONTROLLER_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
 
+# Eyes to the neck's rotation axis, in the headset's own frame: -Z is forward
+# and +Y is up here, so this reads as below and behind the face.
+#
+# The head does not turn about the headset. The rotation axis is in the neck,
+# and the headset rides ahead of it, so a head turn swings the headset along an
+# arc. Subtracting the headset position alone therefore still reads that arc as
+# the operator translating, and drags the target with it -- 4 to 6 cm at 30
+# degrees and 11 cm at 90. Subtracting the pivot instead leaves the reference
+# motionless under head rotation while it keeps translating when the operator
+# leans or walks, so the workspace follows the body without inheriting the neck.
+#
+# This is the neck model that 3DOF VR used in reverse: there it synthesised the
+# eye translation a headset could not measure, here it removes the one we can.
+#
+# An estimate, not a measurement, and anatomy varies: override it per operator
+# with ``pose: neck_pivot_offset`` in the view configuration file. To fit it
+# from data, record ``pose_reference`` while turning the head with the body held
+# still and take the offset that minimises the variance of
+# ``p_head + R_head * offset`` -- that point is the pivot. Setting it to
+# [0, 0, 0] restores the plain headset subtraction.
+_NECK_PIVOT_OFFSET: np.ndarray = np.array([0.0, -0.075, 0.080], dtype=np.float32)
+
 
 app = FastAPI()
 
@@ -112,6 +134,13 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     target. The controller orientation is passed through as its world
     orientation for the same reason.
 
+    What is subtracted is the neck pivot rather than the headset itself,
+    since the headset orbits that pivot as the head turns and would
+    otherwise carry the arc into the target. The viewer rotation is used
+    to place the pivot, which is not the same as applying it to the
+    hand: it only says which way the operator is facing, so the point
+    behind their face can be found.
+
     WebXR style:
       * right-handed
       * {
@@ -128,14 +157,16 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
       * right-handed
       * [x, y, z, qw, qx, qy, qz]
     """
-    position = np.array(
-        [
-            pose["x"] - reference["x"],
-            pose["y"] - reference["y"],
-            pose["z"] - reference["z"],
-        ],
-        dtype=np.float32,
+    reference_rotation = Rotation.from_quat(
+        [reference["qx"], reference["qy"], reference["qz"], reference["qw"]]
     )
+    # Turned into world axes, so "behind the face" follows where the head faces.
+    pivot = np.array(
+        [reference["x"], reference["y"], reference["z"]], dtype=np.float32
+    ) + reference_rotation.apply(_NECK_PIVOT_OFFSET)
+    position = (
+        np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32) - pivot
+    ).astype(np.float32)
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
 
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
@@ -375,10 +406,17 @@ def main():
     video.configure(args)
 
     # Read once at startup; restart the dataflow to apply a change.
-    frame_offset = (video.view_configuration().get("pose") or {}).get("frame_offset")
+    pose_configuration = video.view_configuration().get("pose") or {}
+
+    frame_offset = pose_configuration.get("frame_offset")
     if frame_offset is not None:
         global _FRAME_OFFSET_CELL
         _FRAME_OFFSET_CELL = np.array(frame_offset, dtype=np.float32).reshape(3)
+
+    neck_pivot_offset = pose_configuration.get("neck_pivot_offset")
+    if neck_pivot_offset is not None:
+        global _NECK_PIVOT_OFFSET
+        _NECK_PIVOT_OFFSET = np.array(neck_pivot_offset, dtype=np.float32).reshape(3)
 
     global node
     node = dora.Node()
