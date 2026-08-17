@@ -159,7 +159,11 @@ if (navigator.xr) {
         continue;
       }
       const suffix = `_${source.handedness}`;
-      const pose = frame.getPose(source.gripSpace, space);
+      // The target ray space is the OpenXR aim pose: its -Z points where
+      // the controller points. The node maps the gripper onto that axis
+      // directly, so it must not be the grip pose, whose -Z runs along the
+      // handle and would turn the handle's tilt into the gripper's.
+      const pose = frame.getPose(source.targetRaySpace, space);
       if (pose) {
         response[`pose${suffix}`] = {
           x: pose.transform.position.x,
