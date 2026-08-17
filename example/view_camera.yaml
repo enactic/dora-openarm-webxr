@@ -46,6 +46,7 @@ pose:
   # Eyes to the neck's rotation axis, in the headset's own frame
   # (-z forward, +y up), in meters. The hand positions are made relative
   # to this pivot rather than to the headset, so a head turn does not
-  # swing the target along the arc the headset travels. Tune per
-  # operator; [0, 0, 0] subtracts the headset position itself.
+  # swing the target along the arc the headset travels. Measure it per
+  # operator by holding both grips while turning the head, which prints
+  # the value to put here; [0, 0, 0] subtracts the headset itself.
   neck_pivot_offset: [0.0, -0.075, 0.080]

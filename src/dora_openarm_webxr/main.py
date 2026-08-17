@@ -38,6 +38,7 @@ receives a ``STOP`` event.
 
 import argparse
 import asyncio
+import collections
 import dora
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +52,7 @@ import time
 import uvicorn
 
 from .smoothing import OneEuroPoseSmoother
+from . import calibration
 from . import video
 
 args = None
@@ -105,12 +107,174 @@ _CONTROLLER_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
 # eye translation a headset could not measure, here it removes the one we can.
 #
 # An estimate, not a measurement, and anatomy varies: override it per operator
-# with ``pose: neck_pivot_offset`` in the view configuration file. To fit it
-# from data, record ``pose_reference`` while turning the head with the body held
-# still and take the offset that minimises the variance of
-# ``p_head + R_head * offset`` -- that point is the pivot. Setting it to
-# [0, 0, 0] restores the plain headset subtraction.
+# with ``pose: neck_pivot_offset`` in the view configuration file, or measure it
+# by holding both grips while turning the head, which fits it from the run and
+# reports the number to keep. Setting it to [0, 0, 0] restores the plain
+# headset subtraction, which is also how the two can be compared.
 _NECK_PIVOT_OFFSET: np.ndarray = np.array([0.0, -0.075, 0.080], dtype=np.float32)
+
+
+# How many headset poses a run may hold. A grip left held down stops growing
+# here instead of the process, and at the headset's display rate this is some
+# twenty seconds, well past any deliberate shake.
+_CALIBRATION_CAPACITY = 2000
+
+# Fewer poses than this is a slip of the button rather than a calibration.
+# The headset reports at its display rate, so this is a second or so of run.
+_CALIBRATION_MIN_SAMPLES = 100
+
+# A run has to turn the head far enough about every axis for the fit to see
+# all three offset components. 0.02 is about a 20 degree sweep, which a
+# deliberate shake passes twice over.
+_CALIBRATION_MIN_OBSERVABILITY = 0.02
+
+# The headset's own axes, in the order the offset components come in.
+_OFFSET_AXIS_NAMES = ("lateral", "vertical", "fore-aft")
+
+# The head motion that pins each of those components. A rotation cannot see
+# the offset along the axis it turns about, so what is missing is always a
+# turn about a different one: only yawing hides the vertical offset, and
+# only nodding hides the lateral one.
+_PINNING_MOTION = ("side to side", "up and down", "side to side")
+
+# How far the fitted pivot may still wander over the run, in meters. Body
+# motion lands here, and so does the model error: a neck yaws and nods about
+# joints a few centimeters apart rather than the one point fitted here, so
+# some residual is the anatomy rather than the operator. 20 mm leaves the
+# offset good to about a centimeter, against the 11 cm error it removes.
+_CALIBRATION_MAX_RESIDUAL = 0.020
+
+# Where a neck can be, relative to the eyes, in meters: on the midline, and
+# below and behind them. A run that satisfies everything above can still land
+# somewhere a body does not go, and this is the last thing between that and
+# the arm following it.
+_CALIBRATION_MAX_LATERAL = 0.05
+_CALIBRATION_MAX_VERTICAL = 0.20
+_CALIBRATION_MAX_FORE_AFT = 0.20
+
+
+class _PivotCalibration:
+    """Collects headset poses while the operator holds both grips."""
+
+    def __init__(self, capacity=_CALIBRATION_CAPACITY):
+        self._held = set()
+        self._samples = collections.deque(maxlen=capacity)
+
+    @property
+    def collecting(self):
+        """Whether both grips are held, so poses belong to a run.
+
+        Named rather than counted, so an input source that reports no
+        handedness cannot stand in for the second hand.
+        """
+        return self._held == {"right", "left"}
+
+    def hold(self, side):
+        """Take a grip press, which starts a fresh run once both are down."""
+        self._held.add(side)
+        if self.collecting:
+            self._samples.clear()
+
+    def add(self, reference):
+        """Keep a headset pose if a run is under way, otherwise drop it."""
+        if not self.collecting:
+            return
+        self._samples.append(
+            [
+                reference["x"],
+                reference["y"],
+                reference["z"],
+                reference["qx"],
+                reference["qy"],
+                reference["qz"],
+                reference["qw"],
+            ]
+        )
+
+    def release(self, side):
+        """Take a grip release, returning the run's poses if it ended one.
+
+        The rows are ``[x, y, z, qx, qy, qz, qw]``, which is the quaternion
+        order ``Rotation.from_quat`` reads.
+        """
+        ended = self.collecting and side in ("right", "left")
+        self._held.discard(side)
+        if not ended or not self._samples:
+            return None
+        return np.array(self._samples, dtype=np.float64)
+
+
+def _apply_pivot_calibration(samples):
+    """Fit the neck pivot from a run, say what came of it, and use it.
+
+    The fitted offset only replaces the one in use if it passes every
+    check, so a run that went wrong costs the operator the shake and
+    nothing else.
+    """
+    offset, diagnostics = calibration.fit_pivot_offset(
+        samples[:, :3], Rotation.from_quat(samples[:, 3:])
+    )
+    reason = _check_pivot_offset(offset, diagnostics)
+    if reason is not None:
+        print(f"neck pivot calibration rejected: {reason}", flush=True)
+        return
+
+    global _NECK_PIVOT_OFFSET
+    _NECK_PIVOT_OFFSET = offset.astype(np.float32)
+
+    formatted = ", ".join(f"{component:.3f}" for component in offset)
+    print(
+        f"neck pivot calibration applied from {diagnostics['samples']} poses: "
+        f"the pivot held to {diagnostics['residual_rms'] * 1000:.1f} mm while "
+        f"the headset moved {diagnostics['headset_rms'] * 1000:.1f} mm.\n"
+        "  Keep it across restarts by adding to the view configuration file:\n"
+        "    pose:\n"
+        f"      neck_pivot_offset: [{formatted}]",
+        flush=True,
+    )
+
+
+def _check_pivot_offset(offset, diagnostics):
+    """Why a fitted neck pivot offset is not worth applying, or None.
+
+    The fit itself reports what the run could and could not see; the
+    thresholds live here, next to the operator who has to be told what to
+    do differently.
+    """
+    samples = diagnostics["samples"]
+    if samples < _CALIBRATION_MIN_SAMPLES:
+        return (
+            f"only {samples} headset poses came in; "
+            "hold the buttons down longer while turning the head"
+        )
+
+    observability = diagnostics["observability"]
+    if observability[0] < _CALIBRATION_MIN_OBSERVABILITY:
+        axis = int(np.argmax(np.abs(diagnostics["observability_axes"][0])))
+        return (
+            f"the head did not turn enough to see the {_OFFSET_AXIS_NAMES[axis]} "
+            f"offset; turn it {_PINNING_MOTION[axis]} as well"
+        )
+
+    residual = diagnostics["residual_rms"]
+    if residual > _CALIBRATION_MAX_RESIDUAL:
+        return (
+            f"the pivot still moved {residual * 1000:.0f} mm over the run; "
+            "hold the body still and turn only the head"
+        )
+
+    lateral, vertical, fore_aft = offset
+    if (
+        abs(lateral) > _CALIBRATION_MAX_LATERAL
+        or not -_CALIBRATION_MAX_VERTICAL <= vertical <= 0.0
+        or not 0.0 <= fore_aft <= _CALIBRATION_MAX_FORE_AFT
+    ):
+        return (
+            f"the fitted offset [{lateral:.3f}, {vertical:.3f}, {fore_aft:.3f}] "
+            "is not where a neck is: it belongs on the midline, below the eyes "
+            "and behind them"
+        )
+    return None
 
 
 app = FastAPI()
@@ -232,6 +396,7 @@ async def _websocket_endpoint(websocket: WebSocket):
         "right": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
         "left": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
     }
+    pivot_calibration = _PivotCalibration()
 
     await websocket.accept()
     try:
@@ -242,6 +407,16 @@ async def _websocket_endpoint(websocket: WebSocket):
             metadata = {"timestamp": time.time_ns()}
             if type == "session-start":
                 node.send_output("status", pa.array(["ready"]), metadata)
+            elif type == "squeeze-start":
+                # Read leniently: a browser holding an older ar.js in cache
+                # sends no handedness, and no hand is one that never pairs up,
+                # so calibration stays out of reach rather than taking the
+                # connection down with it.
+                pivot_calibration.hold(response.get("handedness"))
+            elif type == "squeeze-end":
+                samples = pivot_calibration.release(response.get("handedness"))
+                if samples is not None:
+                    _apply_pivot_calibration(samples)
             elif type == "frame":
                 smoother_time = time.perf_counter()
                 node.send_output(
@@ -256,6 +431,7 @@ async def _websocket_endpoint(websocket: WebSocket):
                         _build_head_pose_output(reference),
                         metadata,
                     )
+                    pivot_calibration.add(reference)
                 for button in ["a", "b", "x", "y"]:
                     name = f"button_{button}"
                     if name in response:
@@ -267,7 +443,15 @@ async def _websocket_endpoint(websocket: WebSocket):
                 for side in ["right", "left"]:
                     pose = f"pose_{side}"
                     trigger = f"trigger_{side}"
-                    if pose in response and trigger in response and reference:
+                    # The hands stop while a run is under way. Turning the
+                    # head moves the target by the very arc being measured, and
+                    # the operator is shaking their head, not reaching.
+                    if (
+                        pose in response
+                        and trigger in response
+                        and reference
+                        and not pivot_calibration.collecting
+                    ):
                         smoother = smoothers[side]
                         adjusted_pose = _adjust_pose(
                             response[pose], reference, smoother, smoother_time

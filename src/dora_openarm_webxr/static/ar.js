@@ -107,6 +107,9 @@ if (navigator.xr) {
   function onSqueezeStart(event) {
     const response = {
       type: "squeeze-start",
+      // Which hand, so the node can ask for both grips at once before it
+      // takes a neck pivot calibration run.
+      handedness: event.inputSource.handedness,
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
@@ -123,6 +126,9 @@ if (navigator.xr) {
   function onSqueezeEnd(event) {
     const response = {
       type: "squeeze-end",
+      // Which hand, so the node can ask for both grips at once before it
+      // takes a neck pivot calibration run.
+      handedness: event.inputSource.handedness,
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };

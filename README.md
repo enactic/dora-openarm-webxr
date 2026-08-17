@@ -117,6 +117,25 @@ head does not swing the target along the arc the headset travels.
 Anatomy varies, so tune it per operator; `[0, 0, 0]` goes back to
 subtracting the headset position.
 
+## Calibrating the neck pivot
+
+Rather than guessing the offset, measure it. Hold **both grips** and,
+keeping the body still, turn the head slowly **side to side and then up
+and down**; release either grip to finish. The node fits the point that
+stayed put through the turn, applies it right away so it can be tried,
+and prints the number to paste into the view configuration file to keep
+it across restarts.
+
+Both directions are needed: a rotation says nothing about the offset
+along the axis it turns about, so shaking only sideways leaves the
+vertical offset unmeasured. A run is refused, with the reason, if the
+head did not turn far enough about every axis, if the body moved during
+it, if it was too short, or if the fitted point is not where a neck can
+be. A refused run changes nothing.
+
+The hands stop publishing while both grips are held, since turning the
+head would otherwise drag the target by the very arc being measured.
+
 ## Debug
 
 You can use [Immersive Web

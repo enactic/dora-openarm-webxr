@@ -40,6 +40,7 @@ dora-openarm-webxr = "dora_openarm_webxr.main:main"
 
 [dependency-groups]
 dev = [
+  "pytest",
   "ruff == 0.14.11", # sync with .pre-commit-config.yaml
 ]
 
