@@ -114,27 +114,68 @@ neck's rotation axis, in the headset's own frame, overriding the
 built-in default of `[0.0, -0.075, 0.080]`. Hand positions are made
 relative to that pivot rather than to the headset itself, so turning the
 head does not swing the target along the arc the headset travels.
-Anatomy varies, so tune it per operator; `[0, 0, 0]` goes back to
-subtracting the headset position.
+Anatomy varies, so tune it per operator, or measure it as described in
+[Calibrating the neck pivot](#calibrating-the-neck-pivot) below;
+`[0, 0, 0]` goes back to subtracting the headset position.
 
 ## Calibrating the neck pivot
 
-Rather than guessing the offset, measure it. Hold **both grips** and,
-keeping the body still, turn the head slowly **side to side and then up
-and down**; release either grip to finish. The node fits the point that
-stayed put through the turn, applies it right away so it can be tried,
-and prints the number to paste into the view configuration file to keep
-it across restarts.
+Rather than guessing the offset, measure it: the operator turns their
+head, and the node fits the one point that stayed put through the turn.
+The result is reported on the node's output, so watch that while the
+operator works:
+
+```bash
+tail -f "$(ls -t example/out/*/log_webxr.txt | head -1)"
+```
+
+1. Start a session as above. Have the operator stand facing the
+   workspace with their feet planted.
+2. Hold **both grips** — the side buttons squeezed with the middle
+   finger, not the index triggers. Nothing starts until both are down.
+3. Keeping the body still, turn the head slowly some 40 degrees **side
+   to side**, twice over, and then some 40 degrees **up and down**,
+   twice over. Four to six seconds in all.
+4. Release either grip. The fit runs at that moment.
 
 Both directions are needed: a rotation says nothing about the offset
 along the axis it turns about, so shaking only sideways leaves the
-vertical offset unmeasured. A run is refused, with the reason, if the
-head did not turn far enough about every axis, if the body moved during
-it, if it was too short, or if the fitted point is not where a neck can
-be. A refused run changes nothing.
+vertical offset unmeasured. The lower bounds are a hundred poses, about
+a second at the headset's display rate, and some 20 degrees about every
+axis, so the run above has a wide margin over both.
+
+An accepted run is applied immediately, so the operator can turn their
+head and see for themselves whether the target now stays put, and it is
+reported like this:
+
+```
+neck pivot calibration applied from 412 poses: the pivot held to 6.1 mm while the headset moved 47.2 mm.
+  Keep it across restarts by adding to the view configuration file:
+    pose:
+      neck_pivot_offset: [0.004, -0.081, 0.076]
+```
+
+The smaller the distance the pivot held to, and the larger the one the
+headset moved, the better the run. The fitted value lives only as long
+as the session, so paste the printed lines into the view configuration
+file to keep it.
+
+A refused run changes nothing and says what to do differently. Holding
+both grips again starts a fresh run, so it can be repeated until it
+takes.
+
+| Reported reason                                           | What to do                          |
+|-----------------------------------------------------------|-------------------------------------|
+| `only N headset poses came in`                            | Hold the grips down for longer.     |
+| `the head did not turn enough to see the vertical offset` | Add the up and down turn.           |
+| `the head did not turn enough to see the lateral offset`  | Add the side to side turn.          |
+| `the pivot still moved N mm over the run`                 | Plant the feet, turn only the head. |
+| `the fitted offset [...] is not where a neck is`          | The fit broke down; run it again.   |
 
 The hands stop publishing while both grips are held, since turning the
 head would otherwise drag the target by the very arc being measured.
+This is meant to happen. The gripper still follows the trigger, so
+leave the triggers alone during a run.
 
 ## Debug
 
