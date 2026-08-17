@@ -108,19 +108,27 @@ _CONTROLLER_TO_EE: Rotation = Rotation.from_euler("z", 90, degrees=True)
 #
 # An estimate, not a measurement, and anatomy varies: override it per operator
 # with ``pose: neck_pivot_offset`` in the view configuration file, or measure it
-# by holding both grips while turning the head, which fits it from the run and
-# reports the number to keep. Setting it to [0, 0, 0] restores the plain
+# by holding the Y button down while turning the head, which fits it from the
+# run and reports the number to keep. Setting it to [0, 0, 0] restores the plain
 # headset subtraction, which is also how the two can be compared.
 _NECK_PIVOT_OFFSET: np.ndarray = np.array([0.0, -0.075, 0.080], dtype=np.float32)
 
 
-# How many headset poses a run may hold. A grip left held down stops growing
+# How many headset poses a run may hold. A button left held down stops growing
 # here instead of the process, and at the headset's display rate this is some
 # twenty seconds, well past any deliberate shake.
 _CALIBRATION_CAPACITY = 2000
 
-# Fewer poses than this is a slip of the button rather than a calibration.
-# The headset reports at its display rate, so this is a second or so of run.
+# How long the button has to be held before a run starts, in seconds. The
+# button is published as an output in its own right, so this is what keeps an
+# ordinary press of it from stopping the hands: nothing happens until the press
+# has lasted longer than anyone presses a button to mean something else.
+_CALIBRATION_MIN_HOLD = 3.0
+
+# Fewer poses than this and the run is too thin to fit from. The run starts
+# once the button has been held, not when it was pressed, so this is a second
+# or so of holding beyond that at the headset's display rate: it catches the
+# operator who lets go the moment the hands stop.
 _CALIBRATION_MIN_SAMPLES = 100
 
 # A run has to turn the head far enough about every axis for the fit to see
@@ -154,26 +162,60 @@ _CALIBRATION_MAX_FORE_AFT = 0.20
 
 
 class _PivotCalibration:
-    """Collects headset poses while the operator holds both grips."""
+    """Collects headset poses once the operator has held the Y button down.
+
+    The button state arrives once per frame rather than as a press and a
+    release event, so the edges are found here. Reading it that way is
+    also the failsafe: a controller that falls asleep mid-run stops
+    reporting the button at all, the caller reads that as not pressed,
+    and the run ends instead of leaving the hands stopped for good.
+    """
 
     def __init__(self, capacity=_CALIBRATION_CAPACITY):
-        self._held = set()
+        self._pressed_at = None
+        self._running = False
         self._samples = collections.deque(maxlen=capacity)
 
     @property
     def collecting(self):
-        """Whether both grips are held, so poses belong to a run.
+        """Whether a run is under way, so poses belong to it."""
+        return self._running
 
-        Named rather than counted, so an input source that reports no
-        handedness cannot stand in for the second hand.
+    def update(self, pressed, now):
+        """Take the button state for a frame, returning a finished run.
+
+        A press only arms the run; it starts once the button has been
+        held for ``_CALIBRATION_MIN_HOLD``. The hands stop while a run is
+        under way, and the button is published as an output in its own
+        right, so an ordinary press of it must reach that output without
+        the arm noticing. Waiting also puts the operator's only signal
+        where it belongs: they feel the arm stop and know to start
+        turning their head, which is why nothing collected before that
+        moment is kept.
+
+        Args:
+          pressed: whether the Y button is down this frame.
+          now: a monotonic time in seconds, used only for the hold length.
+
+        Returns:
+          The run's poses as ``(N, 7)`` rows of ``[x, y, z, qx, qy, qz,
+          qw]``, which is the quaternion order ``Rotation.from_quat``
+          reads, or None if this frame ended no run worth fitting.
+
         """
-        return self._held == {"right", "left"}
+        if pressed:
+            if self._pressed_at is None:
+                self._pressed_at = now
+            elif not self._running and now - self._pressed_at >= _CALIBRATION_MIN_HOLD:
+                self._running = True
+                self._samples.clear()
+            return None
 
-    def hold(self, side):
-        """Take a grip press, which starts a fresh run once both are down."""
-        self._held.add(side)
-        if self.collecting:
-            self._samples.clear()
+        running, self._running = self._running, False
+        self._pressed_at = None
+        if not running or not self._samples:
+            return None
+        return np.array(self._samples, dtype=np.float64)
 
     def add(self, reference):
         """Keep a headset pose if a run is under way, otherwise drop it."""
@@ -190,18 +232,6 @@ class _PivotCalibration:
                 reference["qw"],
             ]
         )
-
-    def release(self, side):
-        """Take a grip release, returning the run's poses if it ended one.
-
-        The rows are ``[x, y, z, qx, qy, qz, qw]``, which is the quaternion
-        order ``Rotation.from_quat`` reads.
-        """
-        ended = self.collecting and side in ("right", "left")
-        self._held.discard(side)
-        if not ended or not self._samples:
-            return None
-        return np.array(self._samples, dtype=np.float64)
 
 
 def _apply_pivot_calibration(samples):
@@ -245,7 +275,7 @@ def _check_pivot_offset(offset, diagnostics):
     if samples < _CALIBRATION_MIN_SAMPLES:
         return (
             f"only {samples} headset poses came in; "
-            "hold the buttons down longer while turning the head"
+            "keep holding Y after the hands stop, while turning the head"
         )
 
     observability = diagnostics["observability"]
@@ -407,18 +437,17 @@ async def _websocket_endpoint(websocket: WebSocket):
             metadata = {"timestamp": time.time_ns()}
             if type == "session-start":
                 node.send_output("status", pa.array(["ready"]), metadata)
-            elif type == "squeeze-start":
-                # Read leniently: a browser holding an older ar.js in cache
-                # sends no handedness, and no hand is one that never pairs up,
-                # so calibration stays out of reach rather than taking the
-                # connection down with it.
-                pivot_calibration.hold(response.get("handedness"))
-            elif type == "squeeze-end":
-                samples = pivot_calibration.release(response.get("handedness"))
-                if samples is not None:
-                    _apply_pivot_calibration(samples)
             elif type == "frame":
                 smoother_time = time.perf_counter()
+                # An absent button is a released one, so a controller that
+                # falls asleep mid-run cannot leave the hands stopped. The
+                # client only sends the buttons on the profiles it knows, and
+                # on those it sends them every frame.
+                samples = pivot_calibration.update(
+                    bool(response.get("button_y")), smoother_time
+                )
+                if samples is not None:
+                    _apply_pivot_calibration(samples)
                 node.send_output(
                     "vr_receive_times",
                     pa.array([metadata["timestamp"]], type=pa.int64()),

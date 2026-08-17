@@ -114,8 +114,9 @@ neck's rotation axis, in the headset's own frame, overriding the
 built-in default of `[0.0, -0.075, 0.080]`. Hand positions are made
 relative to that pivot rather than to the headset itself, so turning the
 head does not swing the target along the arc the headset travels.
-Anatomy varies, so tune it per operator, or measure it as described in
-[Calibrating the neck pivot](#calibrating-the-neck-pivot) below;
+Anatomy varies, so tune it per operator, or measure it by holding the Y
+button down while turning the head, as described in [Calibrating the
+neck pivot](#calibrating-the-neck-pivot) below;
 `[0, 0, 0]` goes back to subtracting the headset position.
 
 ## Calibrating the neck pivot
@@ -131,18 +132,27 @@ tail -f "$(ls -t example/out/*/log_webxr.txt | head -1)"
 
 1. Start a session as above. Have the operator stand facing the
    workspace with their feet planted.
-2. Hold **both grips** — the side buttons squeezed with the middle
-   finger, not the index triggers. Nothing starts until both are down.
-3. Keeping the body still, turn the head slowly some 40 degrees **side
-   to side**, twice over, and then some 40 degrees **up and down**,
-   twice over. Four to six seconds in all.
-4. Release either grip. The fit runs at that moment.
+2. Press and hold the **Y button** on the left controller. Keep working
+   normally; nothing happens yet.
+3. After **three seconds** the hands stop following. That is the run
+   starting, and it is the only signal the operator gets.
+4. Now, keeping the body still and the button down, turn the head
+   slowly some 40 degrees **side to side**, twice over, and then some
+   40 degrees **up and down**, twice over. Four to six seconds in all.
+5. Release Y. The fit runs at that moment.
 
-Both directions are needed: a rotation says nothing about the offset
-along the axis it turns about, so shaking only sideways leaves the
-vertical offset unmeasured. The lower bounds are a hundred poses, about
-a second at the headset's display rate, and some 20 degrees about every
-axis, so the run above has a wide margin over both.
+Nothing at all happens for those first three seconds: the hands keep
+following, and a press let go before then is an ordinary press of a
+button that a dataflow may have wired to something of its own.
+`button_y` reaches its output the whole time either way. Poses from
+before the hands stop are not kept, since the operator is still
+reaching then rather than turning their head.
+
+Both turn directions are needed: a rotation says nothing about the
+offset along the axis it turns about, so shaking only sideways leaves
+the vertical offset unmeasured. The lower bounds are a hundred poses
+after the hands stop and some 20 degrees about every axis, so the run
+above has a wide margin over both.
 
 An accepted run is applied immediately, so the operator can turn their
 head and see for themselves whether the target now stays put, and it is
@@ -161,21 +171,20 @@ as the session, so paste the printed lines into the view configuration
 file to keep it.
 
 A refused run changes nothing and says what to do differently. Holding
-both grips again starts a fresh run, so it can be repeated until it
-takes.
+Y again starts a fresh run, so it can be repeated until it takes.
 
 | Reported reason                                           | What to do                          |
 |-----------------------------------------------------------|-------------------------------------|
-| `only N headset poses came in`                            | Hold the grips down for longer.     |
+| `only N headset poses came in`                            | Keep holding Y after the hands stop. |
 | `the head did not turn enough to see the vertical offset` | Add the up and down turn.           |
 | `the head did not turn enough to see the lateral offset`  | Add the side to side turn.          |
 | `the pivot still moved N mm over the run`                 | Plant the feet, turn only the head. |
 | `the fitted offset [...] is not where a neck is`          | The fit broke down; run it again.   |
 
-The hands stop publishing while both grips are held, since turning the
-head would otherwise drag the target by the very arc being measured.
-This is meant to happen. The gripper still follows the trigger, so
-leave the triggers alone during a run.
+The hands stop publishing while Y is held, since turning the head would
+otherwise drag the target by the very arc being measured. This is meant
+to happen. The gripper still follows the trigger, so leave the triggers
+alone during a run.
 
 ## Debug
 
@@ -221,6 +230,13 @@ controller poses are sent only when it is.
 | `button_b`         | `bool`            | Whether the B button is pressed or not.                                                                                                         |
 | `button_x`         | `bool`            | Whether the X button is pressed or not.                                                                                                         |
 | `button_y`         | `bool`            | Whether the Y button is pressed or not.                                                                                                         |
+
+`button_y` is published whatever the press does here, but holding it
+down for three seconds starts a [neck pivot
+calibration](#calibrating-the-neck-pivot), and the hand poses stop
+until it is released. An ordinary press is unaffected. Keep the three
+seconds in mind for a dataflow that wires the button to something the
+operator would want to hold down.
 
 ## Command line options
 
