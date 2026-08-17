@@ -180,6 +180,9 @@ if (navigator.xr) {
           const trigger = gamepad.buttons[0];
           response[`trigger${suffix}`] = trigger.value;
 
+          // The squeeze sits next to the trigger under the xr-standard
+          // mapping. Sent as its 0..1 value rather than a pressed flag, so
+          // that a consumer can pick its own threshold.
           const grip = gamepad.buttons[1];
           if (grip) {
             response[`grip${suffix}`] = grip.value;
@@ -196,6 +199,13 @@ if (navigator.xr) {
             response.button_y = y.pressed;
           }
         }
+        // Send the whole array and let the node pick the pair it wants.
+        // Testing the axes for truthiness, as this once did, meant the
+        // joystick was never sent from a Quest at all: its Touch controllers
+        // have no touchpad and report axes[0..1] as a constant 0, so the
+        // check could never pass. A centred thumbstick reads exactly 0 too,
+        // which would have gated out the resting position even on a device
+        // that does have a touchpad.
         if (gamepad.axes.length >= 2) {
           response[`joystick${suffix}`] = Array.from(gamepad.axes);
         }

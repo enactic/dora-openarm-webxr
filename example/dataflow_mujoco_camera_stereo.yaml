@@ -56,6 +56,8 @@ nodes:
       - trigger_right
       - pose_left
       - trigger_left
+      - grip_right
+      - grip_left
       - joystick_x_right
       - joystick_y_right
       - joystick_x_left
@@ -77,6 +79,8 @@ nodes:
       trigger_right: webxr/trigger_right
       pose_left: webxr/pose_left
       trigger_left: webxr/trigger_left
+      grip_right: webxr/grip_right
+      grip_left: webxr/grip_left
       joystick_x_right: webxr/joystick_x_right
       joystick_y_right: webxr/joystick_y_right
       joystick_x_left: webxr/joystick_x_left
@@ -93,6 +97,8 @@ nodes:
       - trigger_right
       - pose_left
       - trigger_left
+      - grip_right
+      - grip_left
       - joystick_x_right
       - joystick_y_right
       - joystick_x_left

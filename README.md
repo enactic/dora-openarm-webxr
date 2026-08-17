@@ -127,7 +127,7 @@ only needed to show a head camera in the VR device.
 
 ## Outputs
 
-This dora-rs node outputs the following data. Pose, trigger and
+This dora-rs node outputs the following data. Pose, trigger, grip and
 joystick outputs are sent on each `frame` message received from the VR
 device. Button outputs are sent only when the corresponding button is
 included in a `frame` message. `pose_reference` is sent whenever the
@@ -143,6 +143,8 @@ controller poses are sent only when it is.
 | `pose_reference`   | `float32[7]`      | The pose of the headset, in the WebXR reference space (x right, y up, -z forward). The hand poses are made relative to this pose, so it is unrotated and unsmoothed and left in the WebXR frame for consumers that drive something from head motion such as a neck. |
 | `trigger_right`    | `float32`         | The value of the right trigger from `0.0` (released) to `1.0` (fully pressed).                                                                  |
 | `trigger_left`     | `float32`         | The value of the left trigger from `0.0` (released) to `1.0` (fully pressed).                                                                   |
+| `grip_right`       | `float32`         | The value of the right grip (squeeze) button from `0.0` (released) to `1.0` (fully pressed).                                                    |
+| `grip_left`        | `float32`         | The value of the left grip. The format is the same as `grip_right`.                                                                             |
 | `joystick_x_right` | `float32`         | The X axis value of the right joystick.                                                                                                         |
 | `joystick_y_right` | `float32`         | The Y axis value of the right joystick.                                                                                                         |
 | `joystick_x_left`  | `float32`         | The X axis value of the left joystick.                                                                                                          |
