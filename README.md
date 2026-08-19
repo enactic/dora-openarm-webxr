@@ -114,68 +114,76 @@ neck's rotation axis, in the headset's own frame, overriding the
 built-in default of `[0.0, -0.075, 0.080]`. Hand positions are made
 relative to that pivot rather than to the headset itself, so turning the
 head does not swing the target along the arc the headset travels.
-Anatomy varies, so tune it per operator, or measure it by holding the Y
-button down while turning the head, as described in [Calibrating the
-neck pivot](#calibrating-the-neck-pivot) below;
-`[0, 0, 0]` goes back to subtracting the headset position.
+Anatomy varies, so tune it per operator, or measure it as described in
+[Calibrating the neck pivot](#calibrating-the-neck-pivot) below;
+`[0, 0, 0]` goes back to subtracting the headset position. A measured
+offset in `--neck-pivot-file` wins over this one.
 
 ## Calibrating the neck pivot
 
 Rather than guessing the offset, measure it: the operator turns their
 head, and the node fits the one point that stayed put through the turn.
-The result is reported on the node's output, so watch that while the
-operator works:
+
+Calibration is off unless you ask for it. Start the dataflow with
+`--calibration`, or `CALIBRATION` in its YAML, for a session that
+measures. Without it the Y button is an ordinary button: nothing is
+collected and the hands never stop.
 
 ```bash
-tail -f "$(ls -t example/out/*/log_webxr.txt | head -1)"
+TLS_CERTIFICATE_FILE=server.crt TLS_KEY_FILE=server.key \
+  CALIBRATION=true dora run example/dataflow_mujoco.yaml
 ```
 
-1. Start a session as above. Have the operator stand facing the
-   workspace with their feet planted.
-2. Press and hold the **Y button** on the left controller. Keep working
-   normally; nothing happens yet.
-3. After **three seconds** the hands stop following. That is the run
-   starting, and it is the only signal the operator gets.
-4. Now, keeping the body still and the button down, turn the head
-   slowly some 40 degrees **side to side**, twice over, and then some
-   40 degrees **up and down**, twice over. Four to six seconds in all.
-5. Release Y. The fit runs at that moment.
-
-Nothing at all happens for those first three seconds: the hands keep
-following, and a press let go before then is an ordinary press of a
-button that a dataflow may have wired to something of its own.
-`button_y` reaches its output the whole time either way. Poses from
-before the hands stop are not kept, since the operator is still
-reaching then rather than turning their head.
+1. Start a session as above. The headset shows what to do, so the
+   operator needs nothing else in front of them.
+2. Have the operator stand facing the workspace with their feet
+   planted.
+3. Press and hold the **Y button** on the left controller. The run
+   starts at once: the panel turns green and the hands stop following.
+4. Keeping the body still and the button down, turn the head slowly
+   some 40 degrees **side to side**, twice over, and then some 40
+   degrees **up and down**, twice over. Four to six seconds in all.
+5. Release Y. The fit runs at that moment and the result appears on the
+   panel.
 
 Both turn directions are needed: a rotation says nothing about the
 offset along the axis it turns about, so shaking only sideways leaves
 the vertical offset unmeasured. The lower bounds are a hundred poses
-after the hands stop and some 20 degrees about every axis, so the run
-above has a wide margin over both.
+and some 20 degrees about every axis, so the run above has a wide
+margin over both.
 
 An accepted run is applied immediately, so the operator can turn their
-head and see for themselves whether the target now stays put, and it is
-reported like this:
+head and see for themselves whether the target now stays put. It is
+also written to `--neck-pivot-file`, which defaults to `neck_pivot.yaml`
+in the directory the node runs in, and read back from there at startup:
+
+```yaml
+# Measured by dora-openarm-webxr --calibration.
+pose:
+  neck_pivot_offset: [0.004, -0.081, 0.076]
+```
+
+So calibrate once with `--calibration`, then run without it and the
+measurement is still in use. The node says so when it reads the file,
+and the same document can be pasted into the view configuration file
+instead. The node's output carries the run either way:
 
 ```
 neck pivot calibration applied from 412 poses: the pivot held to 6.1 mm while the headset moved 47.2 mm.
-  Keep it across restarts by adding to the view configuration file:
-    pose:
-      neck_pivot_offset: [0.004, -0.081, 0.076]
+  neck_pivot_offset: [0.004, -0.081, 0.076]
+  Written to neck_pivot.yaml, which this node reads at startup.
 ```
 
 The smaller the distance the pivot held to, and the larger the one the
-headset moved, the better the run. The fitted value lives only as long
-as the session, so paste the printed lines into the view configuration
-file to keep it.
+headset moved, the better the run.
 
-A refused run changes nothing and says what to do differently. Holding
-Y again starts a fresh run, so it can be repeated until it takes.
+A refused run changes nothing and says what to do differently, on the
+panel and on the output both. Holding Y again starts a fresh run, so it
+can be repeated until it takes.
 
 | Reported reason                                           | What to do                          |
 |-----------------------------------------------------------|-------------------------------------|
-| `only N headset poses came in`                            | Keep holding Y after the hands stop. |
+| `only N headset poses came in`                            | Hold Y for longer than a tap.       |
 | `the head did not turn enough to see the vertical offset` | Add the up and down turn.           |
 | `the head did not turn enough to see the lateral offset`  | Add the side to side turn.          |
 | `the pivot still moved N mm over the run`                 | Plant the feet, turn only the head. |
@@ -231,12 +239,12 @@ controller poses are sent only when it is.
 | `button_x`         | `bool`            | Whether the X button is pressed or not.                                                                                                         |
 | `button_y`         | `bool`            | Whether the Y button is pressed or not.                                                                                                         |
 
-`button_y` is published whatever the press does here, but holding it
-down for three seconds starts a [neck pivot
-calibration](#calibrating-the-neck-pivot), and the hand poses stop
-until it is released. An ordinary press is unaffected. Keep the three
-seconds in mind for a dataflow that wires the button to something the
-operator would want to hold down.
+`button_y` is published whatever the press does here. In a session
+started with `--calibration` it also runs a [neck pivot
+calibration](#calibrating-the-neck-pivot) for as long as it is held,
+and the hand poses stop until it is released. Without that option the
+press does nothing but reach the output, so a dataflow that wires the
+button to something the operator holds down is unaffected.
 
 ## Command line options
 
@@ -252,6 +260,8 @@ useful in a dora-rs dataflow YAML.
 | `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS.        |
 | `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required because WebXR requires HTTPS. |
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
+| `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
+| `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |
 
 ## License
 

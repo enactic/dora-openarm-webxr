@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createInstructionPanel } from "./instructions.js";
 import { createCameraPanel } from "./panel.js";
 import { createStereoPanel } from "./stereo.js";
 
@@ -27,6 +28,7 @@ if (navigator.xr) {
   let runningSession = null;
   let configuration = null;
   let cameraPanel = null;
+  let instructionPanel = null;
   // Started early so the first frame is ready by session start. The
   // session can only start once this has resolved, so the view and the
   // panel are always set by then.
@@ -49,7 +51,37 @@ if (navigator.xr) {
       }
       return configuration;
     });
+  // Only a node started with --calibration wants the instructions, and
+  // only it acts on the Y button, so the panel that asks for a head turn
+  // is never in front of an operator whose Y button means something
+  // else. Read after the view, since the panel has to know whether a
+  // camera view is drawing the frame or it is the only one there.
+  const sessionReady = configurationReady.then((configuration) =>
+    fetch("calibration")
+      .then((response) => response.json())
+      // So an older node, which has no such route, still starts.
+      .catch(() => ({ enabled: false }))
+      .then((calibration) => {
+        if (calibration.enabled) {
+          instructionPanel = createInstructionPanel({
+            clears: cameraPanel === null,
+          });
+        }
+        return configuration;
+      }),
+  );
 
+  websocket.addEventListener("message", (event) => {
+    // The node only speaks to say what came of a calibration run.
+    try {
+      const message = JSON.parse(event.data);
+      if (message.type === "calibration-result" && instructionPanel) {
+        instructionPanel.setResult(message);
+      }
+    } catch (error) {
+      console.error("cannot read a message from the node: " + error);
+    }
+  });
   websocket.addEventListener("close", (event) => {
     websocket = null;
     if (runningSession) {
@@ -128,6 +160,15 @@ if (navigator.xr) {
     };
     websocket.send(JSON.stringify(response));
   }
+  function sendFrameResponse(response) {
+    if (instructionPanel) {
+      // An absent button is a released one, which is how the node reads
+      // it too, so a controller that falls asleep or goes missing ends
+      // the run on the panel just as it ends it there.
+      instructionPanel.setPressed(response.button_y === true);
+    }
+    websocket.send(JSON.stringify(response));
+  }
   function sendFrame(session, space, time, frame) {
     const response = {
       type: "frame",
@@ -151,7 +192,7 @@ if (navigator.xr) {
       };
     }
     if (session.inputSources.length < 2) {
-      websocket.send(JSON.stringify(response));
+      sendFrameResponse(response);
       return;
     }
     for (const source of session.inputSources) {
@@ -215,7 +256,7 @@ if (navigator.xr) {
         }
       }
     }
-    websocket.send(JSON.stringify(response));
+    sendFrameResponse(response);
   }
   function onSessionStart(session) {
     runningSession = session;
@@ -243,6 +284,9 @@ if (navigator.xr) {
     if (cameraPanel) {
       cameraPanel.attach(gl);
     }
+    if (instructionPanel) {
+      instructionPanel.attach(gl);
+    }
 
     Promise.all([
       // The hand poses and the head pose are both read in the
@@ -262,6 +306,12 @@ if (navigator.xr) {
           if (cameraPanel) {
             cameraPanel.render(session, panelSpace, frame);
           }
+          // After the camera view, so the text is over the image rather
+          // than cleared away with the rest of the frame, and always in
+          // the viewer space so it stays readable through a head turn.
+          if (instructionPanel) {
+            instructionPanel.render(session, viewerSpace, frame);
+          }
           session.requestAnimationFrame(onFrame);
         }
         session.requestAnimationFrame(onFrame);
@@ -277,7 +327,7 @@ if (navigator.xr) {
   websocket.addEventListener("open", () => {
     // The session mode is configured with the head camera view so that
     // passthrough can be turned off without changing this file.
-    configurationReady.then((configuration) => {
+    sessionReady.then((configuration) => {
       const mode = configuration.session.mode;
       navigator.xr.isSessionSupported(mode).then((isSupported) => {
         if (isSupported) {
