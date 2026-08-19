@@ -18,9 +18,9 @@ import { createStereoPanel } from "./stereo.js";
 
 // Used only when the node's view configuration cannot be read.
 const FALLBACK_CONFIGURATION = {
-  view: "fixed",
+  view: "mono",
   session: { mode: "immersive-ar" },
-  panel: { distance: 1.3, width: 1.5 },
+  panel: { lock: "room", distance: 1.3, width: 1.5 },
 };
 
 if (navigator.xr) {
@@ -41,9 +41,9 @@ if (navigator.xr) {
     })
     .then((loaded) => {
       configuration = loaded;
-      // The default fixed view hangs one image in the room; the stereo
-      // view locks one image per eye to the operator's head; "none"
-      // shows no camera at all.
+      // How many images: the default "mono" draws one, "stereo" draws
+      // one per eye, and "none" shows no camera at all. Where they hang
+      // is a separate question, answered by "panel: lock" below.
       if (configuration.view === "stereo") {
         cameraPanel = createStereoPanel(configuration);
       } else if (configuration.view !== "none") {
@@ -292,14 +292,14 @@ if (navigator.xr) {
       // The hand poses and the head pose are both read in the
       // world-fixed local space, and the node makes the hand positions
       // relative to the head pose without inheriting the head rotation.
-      // The stereo view locks its panel to the viewer space; the fixed
-      // view hangs it in the room.
+      // The panel hangs in whichever space "panel: lock" names: the
+      // room is the local space, the head is the viewer space.
       session.requestReferenceSpace("viewer"),
       session.requestReferenceSpace("local"),
     ])
       .then(([viewerSpace, localSpace]) => {
-        const panelSpace =
-          configuration.view === "fixed" ? localSpace : viewerSpace;
+        const panel = configuration.panel || {};
+        const panelSpace = panel.lock === "head" ? viewerSpace : localSpace;
         function onFrame(time, frame) {
           log("sources: " + session.inputSources.length);
           sendFrame(session, localSpace, time, frame);

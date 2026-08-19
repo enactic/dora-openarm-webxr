@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Draws the head camera as a stereo panel inside the WebXR session.
-// Selected with "view: stereo" in the view configuration.
+// Selected with "view: stereo" in the view configuration, and meant to
+// be paired with "panel: lock: head" there.
 //
 // The panel is locked to the operator's head. The camera sits on a neck
 // that follows them, so the image already lags; keeping the frame

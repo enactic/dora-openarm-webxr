@@ -33,7 +33,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 
 # dora-rs input IDs mapped to the eye that the frame is rendered on.
-# The default fixed view uses only the right eye; the stereo view uses
+# The default mono view uses only the right eye; the stereo view uses
 # both.
 CAMERA_INPUTS = {
     "camera_head_left": "left",
@@ -46,9 +46,9 @@ EYE_PREFIX = {"left": b"\x00", "right": b"\x01"}
 
 # Used when no --view-configuration-file is given.
 DEFAULT_VIEW_CONFIGURATION: dict = {
-    "view": "fixed",
+    "view": "mono",
     "session": {"mode": "immersive-ar"},
-    "panel": {"distance": 1.3, "width": 1.5},
+    "panel": {"lock": "room", "distance": 1.3, "width": 1.5},
 }
 
 _frames: dict = {"left": None, "right": None}

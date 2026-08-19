@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Head camera panel in the VR device: one image fixed in the room.
+# Head camera panel in the VR device: one image locked to the room.
 #
 # For the head-locked stereo view, point VIEW_CONFIGURATION_FILE at
 # view_camera_stereo.yaml instead; "view: none" shows no camera at
@@ -20,8 +20,9 @@
 #
 # Read once when the node starts, so restart the dataflow to apply.
 
-# The camera_head_right image hangs on a panel fixed in the room.
-view: fixed
+# How many images to draw: mono uses the camera_head_right input only,
+# stereo needs camera_head_left too. Where they hang is panel: lock.
+view: mono
 
 session:
   # immersive-ar keeps the room visible around the image, immersive-vr
@@ -29,6 +30,11 @@ session:
   mode: immersive-vr
 
 panel:
+  # What the image hangs off: room leaves it where the headset was
+  # looking when the session started, so a head turn looks away from it;
+  # head carries it along with the operator's gaze.
+  lock: room
+
   # Where the image hangs, relative to where the headset was when the
   # session started: straight ahead at eye height, facing the operator.
 

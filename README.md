@@ -77,8 +77,8 @@ device, so that the operator sees the robot's workspace while
 teleoperating.
 
 The node accepts JPEG images on the `camera_head_right` input and
-forwards them to the VR device, where they are drawn on a panel fixed
-in the room: straight ahead of where the headset was when the session
+forwards them to the VR device, where they are drawn on a panel locked
+to the room: straight ahead of where the headset was when the session
 started, at eye height. Both eyes see the same image, and the panel
 stays put when the operator moves their head. See
 [`example/dataflow_mujoco_camera.yaml`](example/dataflow_mujoco_camera.yaml)
@@ -87,23 +87,31 @@ and
 
 How the panel is drawn is described by a view configuration file,
 passed with `--view-configuration-file`. The node reads it once when
-it starts, so restart the dataflow to apply a change. The example
-files select the view with their `view` key:
+it starts, so restart the dataflow to apply a change. Two keys describe
+the view, and they are independent: `view` says how many images are
+drawn, `panel.lock` says what they hang off.
 
-- [`example/view_camera.yaml`](example/view_camera.yaml) — the
-  default `fixed` view above. Parameters: the session mode, the panel
-  distance and the panel width (the height follows the image aspect
-  ratio).
+`view` is `mono` (one image, from `camera_head_right`), `stereo` (one
+per eye, which also needs `camera_head_left`) or `none` (no camera at
+all: the operator sees the passthrough and only the controller poses are
+used).
+
+`panel.lock` is `room` (the panel stays where the headset was looking
+when the session started, so a head turn looks away from it) or `head`
+(the panel travels with the operator's gaze).
+
+The example files pair them the two useful ways:
+
+- [`example/view_camera.yaml`](example/view_camera.yaml) — the default
+  `mono` view above, locked to the `room`. Parameters: the session mode,
+  the panel distance and the panel width (the height follows the image
+  aspect ratio).
 - [`example/view_camera_stereo.yaml`](example/view_camera_stereo.yaml)
-  — the `stereo` view: one image per eye on a head-locked panel, for a
-  side-by-side stereo camera such as a ZED Mini. It also needs the
-  `camera_head_left` input, and
+  — the `stereo` view, locked to the `head`, for a side-by-side stereo
+  camera such as a ZED Mini.
   [`example/zed_view_parameters.py`](example/zed_view_parameters.py)
   works its camera and alignment parameters out from a ZED camera's
   factory calibration.
-
-`view: none` shows no camera at all: the operator sees the passthrough
-and only the controller poses are used.
 
 Both files also take `pose.frame_offset`: the neutral hand position
 relative to the `arm_origin` site in meters, overriding the built-in

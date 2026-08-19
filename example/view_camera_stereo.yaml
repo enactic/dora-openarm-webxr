@@ -14,7 +14,7 @@
 
 # Head camera stereo panel in the VR device: one image per eye, locked
 # to the operator's head. Needs both the camera_head_left and
-# camera_head_right inputs. For the default room-fixed view, point
+# camera_head_right inputs. For the default room-locked view, point
 # VIEW_CONFIGURATION_FILE at view_camera.yaml instead.
 #
 # Read once when the node starts, so restart the dataflow to apply.
@@ -29,6 +29,8 @@
 #
 #   python example/zed_view_parameters.py --measure
 
+# How many images to draw: stereo needs both camera inputs, mono uses
+# camera_head_right only. Where they hang is panel: lock.
 view: stereo
 
 session:
@@ -44,6 +46,11 @@ camera:
   vertical_fov: 50.1
 
 panel:
+  # What the panel hangs off: head carries it along with the operator's
+  # gaze, which is what a stereo pair wants, since each eye has to keep
+  # looking at its own image. Room would leave it behind on a head turn.
+  lock: head
+
   # Where the panel sits, in meters. Sets the depth the eyes converge
   # at, not how large the image looks. A Quest 3 focuses at about 1.3 m
   # whatever is drawn, so matching it is easiest on the eyes.
