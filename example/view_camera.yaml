@@ -47,6 +47,8 @@ pose:
   # (-z forward, +y up), in meters. The hand positions are made relative
   # to this pivot rather than to the headset, so a head turn does not
   # swing the target along the arc the headset travels. Measure it per
-  # operator by holding both grips while turning the head, which prints
-  # the value to put here; [0, 0, 0] subtracts the headset itself.
+  # operator in a session started with --calibration, by holding the Y
+  # button down while turning the head; the run writes what it measured
+  # to --neck-pivot-file, which wins over this one. [0, 0, 0] subtracts
+  # the headset itself.
   neck_pivot_offset: [0.0, -0.075, 0.080]
