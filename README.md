@@ -139,7 +139,9 @@ TLS_CERTIFICATE_FILE=server.crt TLS_KEY_FILE=server.key \
 2. Have the operator stand facing the workspace with their feet
    planted.
 3. Press and hold the **Y button** on the left controller. The run
-   starts at once: the panel turns green and the hands stop following.
+   starts at once: the panel turns green and the hands stop following,
+   though the gripper still follows the trigger, so leave the triggers
+   alone until the run is over.
 4. Keeping the body still and the button down, turn the head slowly
    some 40 degrees **side to side**, twice over, and then some 40
    degrees **up and down**, twice over. Four to six seconds in all.
@@ -177,22 +179,10 @@ neck pivot calibration applied from 412 poses: the pivot held to 6.1 mm while th
 The smaller the distance the pivot held to, and the larger the one the
 headset moved, the better the run.
 
-A refused run changes nothing and says what to do differently, on the
-panel and on the output both. Holding Y again starts a fresh run, so it
-can be repeated until it takes.
-
-| Reported reason                                           | What to do                          |
-|-----------------------------------------------------------|-------------------------------------|
-| `only N headset poses came in`                            | Hold Y for longer than a tap.       |
-| `the head did not turn enough to see the vertical offset` | Add the up and down turn.           |
-| `the head did not turn enough to see the lateral offset`  | Add the side to side turn.          |
-| `the pivot still moved N mm over the run`                 | Plant the feet, turn only the head. |
-| `the fitted offset [...] is not where a neck is`          | The fit broke down; run it again.   |
-
-The hands stop publishing while Y is held, since turning the head would
-otherwise drag the target by the very arc being measured. This is meant
-to happen. The gripper still follows the trigger, so leave the triggers
-alone during a run.
+A refused run changes nothing and says on the panel, and on the node's
+output, what to do differently: hold Y down longer, add the turn that is
+missing, or keep the body still and turn only the head. Holding Y again
+starts a fresh run, so it can be repeated until it takes.
 
 ## Debug
 
