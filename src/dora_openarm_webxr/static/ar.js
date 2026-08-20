@@ -220,7 +220,8 @@ if (navigator.xr) {
       if (gamepad) {
         if (
           source.profiles.includes("pico-4u") ||
-          source.profiles.includes("meta-quest-touch-plus")
+          source.profiles.includes("meta-quest-touch-plus") ||
+          source.profiles.includes("oculus-touch-v3")
         ) {
           const trigger = gamepad.buttons[0];
           response[`trigger${suffix}`] = trigger.value;
