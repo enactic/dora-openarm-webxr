@@ -18,9 +18,10 @@ Takes the JPEG images of the robot's head camera and forwards them to
 the VR device, so the operator can see the robot's workspace while
 teleoperating. The image is drawn on a panel fixed in the room.
 
-Frames go on their own WebSocket so they never delay the pose messages
-that feed IK. How the panel is placed is tuned in
-``example/view_camera.yaml``.
+Frames leave on their own WebRTC video track, one per eye, so they never
+delay the pose messages that feed IK. This module only keeps the newest
+frame per eye; :mod:`.webrtc` owns the tracks that encode them. How the
+panel is placed is tuned in ``example/view_camera.yaml``.
 """
 
 import argparse
@@ -28,8 +29,6 @@ import asyncio
 import os
 import pathlib
 import yaml
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 
 # dora-rs input IDs mapped to the eye that the frame is rendered on.
@@ -40,10 +39,6 @@ CAMERA_INPUTS = {
     "camera_head_right": "right",
 }
 
-# Each frame is sent as a binary WebSocket message prefixed with one
-# byte identifying the eye, followed by the JPEG data.
-EYE_PREFIX = {"left": b"\x00", "right": b"\x01"}
-
 # Used when no --view-configuration-file is given.
 DEFAULT_VIEW_CONFIGURATION: dict = {
     "view": "mono",
@@ -52,10 +47,12 @@ DEFAULT_VIEW_CONFIGURATION: dict = {
 }
 
 _frames: dict = {"left": None, "right": None}
-# Incremented on every frame so that the video endpoint can tell a new
-# frame from a repeated one and always send the most recent one.
+# Incremented on every frame so that a track can tell a new frame from a
+# repeated one and always encode the most recent one.
 _sequences: dict = {"left": 0, "right": 0}
-_frame_event = asyncio.Event()
+# One event per eye, because each eye has its own track waiting on it.
+# A shared event would need every waiter to agree on when to clear it.
+_events: dict = {"left": asyncio.Event(), "right": asyncio.Event()}
 
 _view_configuration: dict = DEFAULT_VIEW_CONFIGURATION
 
@@ -92,6 +89,22 @@ def view_configuration() -> dict:
     return _view_configuration
 
 
+def eyes() -> list:
+    """Return the eyes this view draws, in track negotiation order.
+
+    ``none`` shows no camera at all, ``stereo`` draws one image per eye,
+    and everything else -- ``mono`` included -- draws the right one only.
+    The order is fixed because the browser tells the tracks apart by the
+    order they were negotiated in.
+    """
+    view = _view_configuration.get("view")
+    if view == "none":
+        return []
+    if view == "stereo":
+        return ["left", "right"]
+    return ["right"]
+
+
 def handle_event(event) -> bool:
     """Store a head camera frame. Return whether the event was ours."""
     if event["type"] != "INPUT" or event["id"] not in CAMERA_INPUTS:
@@ -100,44 +113,26 @@ def handle_event(event) -> bool:
     # The camera node sends JPEG data as a uint8 array.
     _frames[eye] = event["value"].to_numpy(zero_copy_only=False).tobytes()
     _sequences[eye] += 1
-    _frame_event.set()
+    _events[eye].set()
     return True
 
 
-def register_routes(app: FastAPI, should_exit) -> None:
-    """Register the head camera routes on the node's Web application.
+async def wait_next(eye: str, seen_sequence: int) -> tuple:
+    """Wait for a frame of ``eye`` newer than ``seen_sequence``, return it.
 
-    ``should_exit`` is a callable so this module need not know how the
-    node shuts its server down.
+    Returns the JPEG payload and its sequence number. A slow encoder
+    skips ahead to the newest frame rather than building a queue, which
+    is the right trade for teleoperation video.
     """
+    while _sequences[eye] == seen_sequence:
+        _events[eye].clear()
+        await _events[eye].wait()
+    return _frames[eye], _sequences[eye]
 
-    @app.get("/view_configuration")
-    async def _view_configuration_endpoint():
-        """Serve the camera panel parameters to the WebXR front-end."""
-        return _view_configuration
 
-    @app.websocket("/video")
-    async def _video_endpoint(websocket: WebSocket):
-        await websocket.accept()
-        stereo = _view_configuration.get("view") == "stereo"
-        eyes = ["left", "right"] if stereo else ["right"]
-        sent = {eye: -1 for eye in eyes}
-        try:
-            while not should_exit():
-                try:
-                    await asyncio.wait_for(_frame_event.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    # Loop so shutdown is noticed.
-                    continue
-                _frame_event.clear()
-                if any(_frames[eye] is None for eye in eyes):
-                    continue
-                if all(_sequences[eye] == sent[eye] for eye in eyes):
-                    continue
-                # Together, so the eyes never show different frames.
-                for eye in eyes:
-                    sent[eye] = _sequences[eye]
-                    await websocket.send_bytes(EYE_PREFIX[eye] + _frames[eye])
-            await websocket.close()
-        except WebSocketDisconnect:
-            pass
+def reset() -> None:
+    """Forget every stored frame. For tests, which reuse the module."""
+    for eye in _frames:
+        _frames[eye] = None
+        _sequences[eye] = 0
+        _events[eye] = asyncio.Event()

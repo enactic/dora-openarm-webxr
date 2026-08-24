@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { createVideoSource } from "./videosource.js";
+
 // Draws the head camera image on a panel fixed in the room.
 //
 // The panel hangs in the world-fixed local space, straight ahead of
 // where the headset was when the session started, so the operator can
 // look around it or lean in while the image stays put. Both eyes see
 // the same image; depth comes from the panel sitting at a real
-// distance. Where it hangs is tuned over `/view_configuration`.
+// distance. Where it hangs is tuned over the "control" data channel.
 
 const VERTEX_SHADER = `
 attribute vec2 a_corner;
@@ -46,9 +48,6 @@ void main() {
 }
 `;
 
-// Must match EYE_PREFIX in video.py.
-const RIGHT_EYE_PREFIX = 1;
-
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -66,34 +65,16 @@ class CameraPanel {
   #attributes = {};
   #uniforms = {};
   #texture = null;
-  #pending = null;
+  #source = null;
   #size = { width: 0, height: 0 };
   #configuration = null;
-  #websocket = null;
 
-  constructor(configuration) {
+  constructor(configuration, track) {
     this.#configuration = configuration;
-
-    const websocket = new WebSocket("wss://" + location.host + "/video");
-    websocket.binaryType = "arraybuffer";
-    websocket.addEventListener("message", (event) => {
-      const message = new Uint8Array(event.data);
-      // Only the right camera; the left one is for the stereo view.
-      if (message[0] !== RIGHT_EYE_PREFIX) {
-        return;
-      }
-      const jpeg = message.subarray(1);
-      createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
-        .then((bitmap) => {
-          // Drop anything still waiting; it is already stale.
-          if (this.#pending) {
-            this.#pending.close();
-          }
-          this.#pending = bitmap;
-        })
-        .catch(() => {});
-    });
-    this.#websocket = websocket;
+    // No track means the node is not sending this eye; the panel then
+    // draws nothing rather than being absent, so the rest of the scene
+    // is laid out the same either way.
+    this.#source = track ? createVideoSource(track) : null;
   }
 
   // Called once the WebXR session has created its WebGL context.
@@ -140,16 +121,15 @@ class CameraPanel {
   }
 
   #upload() {
-    if (!this.#pending) {
+    if (!this.#source) {
       return;
     }
-    const gl = this.#gl;
-    const bitmap = this.#pending;
-    gl.bindTexture(gl.TEXTURE_2D, this.#texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-    this.#size = { width: bitmap.width, height: bitmap.height };
-    bitmap.close();
-    this.#pending = null;
+    // Keep the previous size when there is no new frame: the panel is
+    // still showing the last one, so its shape must not change.
+    const size = this.#source.upload(this.#gl, this.#texture);
+    if (size) {
+      this.#size = size;
+    }
   }
 
   render(session, space, frame) {
@@ -210,17 +190,13 @@ class CameraPanel {
   }
 
   close() {
-    if (this.#websocket) {
-      this.#websocket.close();
-      this.#websocket = null;
-    }
-    if (this.#pending) {
-      this.#pending.close();
-      this.#pending = null;
+    if (this.#source) {
+      this.#source.close();
+      this.#source = null;
     }
   }
 }
 
-export function createCameraPanel(configuration) {
-  return new CameraPanel(configuration);
+export function createCameraPanel(configuration, track) {
+  return new CameraPanel(configuration, track);
 }
