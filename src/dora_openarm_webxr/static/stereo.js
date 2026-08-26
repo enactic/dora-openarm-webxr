@@ -27,7 +27,7 @@
 // magnifies. All of these numbers come from the node, which pushes them
 // over the "control" data channel when the connection opens.
 
-import { createVideoSource } from "./videosource.js";
+import { createVideoSource } from "./video-source.js";
 
 const VERTEX_SHADER = `
 attribute vec2 a_corner;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createVideoSource } from "./videosource.js";
+import { createVideoSource } from "./video-source.js";
 
 // Draws the head camera image on a panel fixed in the room.
 //
