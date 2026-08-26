@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { connect } from "./connection.js";
 import { createInstructionPanel } from "./instructions.js";
 import { createCameraPanel } from "./panel.js";
 import { createStereoPanel } from "./stereo.js";
@@ -24,82 +25,71 @@ const FALLBACK_CONFIGURATION = {
 };
 
 if (navigator.xr) {
-  let websocket = new WebSocket("wss://" + location.host + "/websocket");
+  let connection = null;
   let runningSession = null;
   let configuration = null;
   let cameraPanel = null;
   let instructionPanel = null;
-  // Started early so the first frame is ready by session start. The
-  // session can only start once this has resolved, so the view and the
-  // panel are always set by then.
-  const configurationReady = fetch("view_configuration")
-    .then((response) => response.json())
-    .catch((error) => {
-      console.error("cannot read view configuration: " + error);
-      // So a missing file cannot stop the session starting.
-      return FALLBACK_CONFIGURATION;
-    })
-    .then((loaded) => {
-      configuration = loaded;
-      // How many images: the default "mono" draws one, "stereo" draws
-      // one per eye, and "none" shows no camera at all. Where they hang
-      // is a separate question, answered by "panel: lock" below.
-      if (configuration.view === "stereo") {
-        cameraPanel = createStereoPanel(configuration);
-      } else if (configuration.view !== "none") {
-        cameraPanel = createCameraPanel(configuration);
-      }
-      return configuration;
-    });
-  // Only a node started with --calibration wants the instructions, and
-  // only it acts on the Y button, so the panel that asks for a head turn
-  // is never in front of an operator whose Y button means something
-  // else. Read after the view, since the panel has to know whether a
-  // camera view is drawing the frame or it is the only one there.
-  const sessionReady = configurationReady.then((configuration) =>
-    fetch("calibration")
-      .then((response) => response.json())
-      // So an older node, which has no such route, still starts.
-      .catch(() => ({ enabled: false }))
-      .then((calibration) => {
-        if (calibration.enabled) {
-          instructionPanel = createInstructionPanel({
-            clears: cameraPanel === null,
-          });
-        }
-        return configuration;
-      }),
-  );
 
-  websocket.addEventListener("message", (event) => {
+  // The node pushes its configuration as soon as the connection opens,
+  // so this page needs no route of its own to read it: whoever serves
+  // this file, the node still decides how it draws itself. The session
+  // can only start once this has resolved, so the view and the panels
+  // are always set by then.
+  const sessionReady = connect().then((opened) => {
+    connection = opened;
+    configuration = opened.configuration || FALLBACK_CONFIGURATION;
+
+    // How many images: the default "mono" draws one, "stereo" draws one
+    // per eye, and "none" shows no camera at all. Where they hang is a
+    // separate question, answered by "panel: lock" in the configuration.
+    if (configuration.view === "stereo") {
+      cameraPanel = createStereoPanel(configuration, opened.tracks);
+    } else if (configuration.view !== "none") {
+      cameraPanel = createCameraPanel(configuration, opened.tracks.right);
+    }
+
+    // Only a node started with --calibration wants the instructions, and
+    // only it acts on the Y button, so the panel that asks for a head
+    // turn is never in front of an operator whose Y button means
+    // something else. Read after the view, since the panel has to know
+    // whether a camera view is drawing the frame or it is the only one
+    // there.
+    if (opened.calibration.enabled) {
+      instructionPanel = createInstructionPanel({
+        clears: cameraPanel === null,
+      });
+    }
+
     // The node only speaks to say what came of a calibration run.
-    try {
-      const message = JSON.parse(event.data);
-      if (message.type === "calibration-result" && instructionPanel) {
+    opened.onCalibrationResult((message) => {
+      if (instructionPanel) {
         instructionPanel.setResult(message);
       }
-    } catch (error) {
-      console.error("cannot read a message from the node: " + error);
-    }
+    });
+
+    // Losing the connection ends the session: an operator left inside a
+    // frozen view has no way to tell that nothing is reaching the robot.
+    opened.onClose(() => {
+      connection = null;
+      if (runningSession) {
+        runningSession.end();
+        runningSession = null;
+      }
+    });
+
+    return configuration;
   });
-  websocket.addEventListener("close", (event) => {
-    websocket = null;
-    if (runningSession) {
-      runningSession.end();
-      runningSession = null;
+
+  function sendControl(message) {
+    if (connection) {
+      connection.sendControl(message);
     }
-  });
-  websocket.addEventListener("error", (event) => {
-    websocket = null;
-    if (runningSession) {
-      runningSession.end();
-      runningSession = null;
-    }
-  });
+  }
 
   function log(message) {
     // document.getElementById("log").innerText += `${message}\n`;
-    // websocket.send(JSON.stringify({type: "log", message: `${message}`}));
+    // sendControl({type: "log", message: `${message}`});
   }
   function onSessionEnd(event) {
     log("ended");
@@ -107,9 +97,9 @@ if (navigator.xr) {
       cameraPanel.close();
     }
     runningSession = null;
-    if (websocket) {
-      websocket.close();
-      websocket = null;
+    if (connection) {
+      connection.close();
+      connection = null;
     }
   }
   function onSelectStart(event) {
@@ -118,7 +108,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function onSelect(event) {
     const response = {
@@ -126,7 +116,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function onSelectEnd(event) {
     const response = {
@@ -134,7 +124,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function onSqueezeStart(event) {
     const response = {
@@ -142,7 +132,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function onSqueeze(event) {
     const response = {
@@ -150,7 +140,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function onSqueezeEnd(event) {
     const response = {
@@ -158,7 +148,7 @@ if (navigator.xr) {
       buttons: event.inputSource.gamepad.buttons,
       axes: event.inputSource.gamepad.axes,
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
   }
   function sendFrameResponse(response) {
     if (instructionPanel) {
@@ -167,7 +157,12 @@ if (navigator.xr) {
       // the run on the panel just as it ends it there.
       instructionPanel.setPressed(response.button_y === true);
     }
-    websocket.send(JSON.stringify(response));
+    // Frames go on the unreliable channel, which numbers them: only the
+    // newest pose is worth anything, so a lost one is dropped rather
+    // than retransmitted behind the frames that follow it.
+    if (connection) {
+      connection.sendFrame(response);
+    }
   }
   function sendFrame(session, space, time, frame) {
     const response = {
@@ -265,7 +260,7 @@ if (navigator.xr) {
     const response = {
       type: "session-start",
     };
-    websocket.send(JSON.stringify(response));
+    sendControl(response);
 
     session.addEventListener("end", onSessionEnd);
 
@@ -325,10 +320,10 @@ if (navigator.xr) {
     navigator.xr.requestSession(mode).then(onSessionStart);
   }
 
-  websocket.addEventListener("open", () => {
-    // The session mode is configured with the head camera view so that
-    // passthrough can be turned off without changing this file.
-    sessionReady.then((configuration) => {
+  // The session mode is configured with the head camera view so that
+  // passthrough can be turned off without changing this file.
+  sessionReady
+    .then((configuration) => {
       const mode = configuration.session.mode;
       navigator.xr.isSessionSupported(mode).then((isSupported) => {
         if (isSupported) {
@@ -339,6 +334,8 @@ if (navigator.xr) {
           });
         }
       });
+    })
+    .catch((error) => {
+      console.error("cannot connect to the node: " + error);
     });
-  });
 }

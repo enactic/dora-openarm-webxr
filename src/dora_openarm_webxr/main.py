@@ -14,8 +14,9 @@
 
 """WebXR server node for OpenArm teleoperation.
 
-This dora-rs node serves the WebXR front-end over HTTPS and accepts a
-WebSocket connection from a VR device such as Meta Quest 3 or PICO 4.
+This dora-rs node talks WebRTC with a VR device such as Meta Quest 3 or
+PICO 4. Controller poses arrive on an unreliable data channel and head
+camera frames leave on video tracks; :mod:`.webrtc` owns that half.
 For each frame received from the device, it converts the controller
 pose from WebXR coordinates into the OpenArm workspace, smooths it with
 a One Euro filter, and publishes the pose, trigger, joystick and button
@@ -31,18 +32,23 @@ The headset pose that the hands are made relative to is published as
 is on ``pose_reference``, in the WebXR reference space, for consumers
 that drive something from head motion such as a neck.
 
+The node serves the front-end itself over HTTPS by default, which
+WebXR requires of any page it runs in. Passing ``--offer`` runs it as a
+pure WebRTC peer instead, with no HTTP server at all: another service
+hosts the page and brokers signaling, and this node needs no
+certificate of its own -- WebRTC brings its own.
+
 The Web server and the dora-rs event loop run concurrently in a single
-asyncio event loop; the server shuts down when the dora-rs node
-receives a ``STOP`` event.
+asyncio event loop; the node shuts down when the dora-rs node receives
+a ``STOP`` event, or, in WebRTC-only mode, when the one browser leaves.
 """
 
 import argparse
 import asyncio
 import collections
 import dora
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-import json
 import numpy as np
 import os
 import pathlib
@@ -55,10 +61,14 @@ import yaml
 from .smoothing import OneEuroPoseSmoother
 from . import calibration
 from . import video
+from . import webrtc
 
 args = None
 node = None
 server = None
+webrtc_server = None
+_state = None
+_running = True
 
 
 # Relative pose to robot workspace mapping.
@@ -513,162 +523,199 @@ def _build_head_pose_output(pose: dict) -> pa.Array:
     return _build_pose_output(head_pose)
 
 
-@app.websocket("/websocket")
-async def _websocket_endpoint(websocket: WebSocket):
-    smoothers = {
-        "right": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
-        "left": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
-    }
-    pivot_calibration = _PivotCalibration(enabled=_CALIBRATION_ENABLED)
+class _ConnectionState:
+    """Per-session state carried across the frame messages.
 
-    await websocket.accept()
-    try:
-        while not server.should_exit:
-            data = await websocket.receive_text()
-            response = json.loads(data)
-            type = response["type"]
-            metadata = {"timestamp": time.time_ns()}
-            if type == "session-start":
-                node.send_output("status", pa.array(["ready"]), metadata)
-            elif type == "frame":
-                smoother_time = time.perf_counter()
-                # An absent button is a released one, so a controller that
-                # falls asleep mid-run cannot leave the hands stopped. The
-                # client only sends the buttons on the profiles it knows, and
-                # on those it sends them every frame.
-                samples = pivot_calibration.update(bool(response.get("button_y")))
-                if samples is not None:
-                    # Back to the headset as well as the node's output: the
-                    # operator cannot see the output while wearing one.
-                    await websocket.send_text(
-                        json.dumps(_apply_pivot_calibration(samples))
-                    )
-                node.send_output(
-                    "vr_receive_times",
-                    pa.array([metadata["timestamp"]], type=pa.int64()),
-                    metadata,
-                )
-                reference = response.get("pose_reference")
-                if reference:
-                    node.send_output(
-                        "pose_reference",
-                        _build_head_pose_output(reference),
-                        metadata,
-                    )
-                    pivot_calibration.add(reference)
-                for button in ["a", "b", "x", "y"]:
-                    name = f"button_{button}"
-                    if name in response:
-                        node.send_output(
-                            name,
-                            pa.array([bool(response[name])], type=pa.bool_()),
-                            metadata,
-                        )
-                for side in ["right", "left"]:
-                    pose = f"pose_{side}"
-                    trigger = f"trigger_{side}"
-                    # The hands stop while a run is under way. Turning the
-                    # head moves the target by the very arc being measured, and
-                    # the operator is shaking their head, not reaching. Without
-                    # --calibration no run is ever under way.
-                    if (
-                        pose in response
-                        and trigger in response
-                        and reference
-                        and not pivot_calibration.collecting
-                    ):
-                        smoother = smoothers[side]
-                        adjusted_pose = _adjust_pose(
-                            response[pose], reference, smoother, smoother_time
-                        )
-                        gripper_angle = _map_trigger_to_gripper(response[trigger], side)
-                        gripper_array = np.array([gripper_angle], dtype=np.float32)
-                        pose_with_gripper = np.concatenate(
-                            [adjusted_pose, gripper_array]
-                        )
-                        node.send_output(
-                            pose,
-                            _build_pose_output(pose_with_gripper),
-                            metadata,
-                        )
-                    if trigger in response:
-                        node.send_output(
-                            trigger,
-                            pa.array([response[trigger]], type=pa.float32()),
-                            metadata,
-                        )
-                    grip = f"grip_{side}"
-                    if grip in response:
-                        node.send_output(
-                            grip,
-                            pa.array([response[grip]], type=pa.float32()),
-                            metadata,
-                        )
-                    joystick = f"joystick_{side}"
-                    if joystick in response:
-                        axes = response[joystick]
-                        # The xr-standard mapping reserves the first axis pair
-                        # for the touchpad and the second for the thumbstick,
-                        # so the stick is axes[2:4] wherever the controller has
-                        # one; a device with only a touchpad reports that pair
-                        # alone and it takes its place. The y sign is flipped
-                        # to keep the convention the Unity sender published,
-                        # which is the one the downstream nodes were written
-                        # against.
-                        x, y = (axes[2], axes[3]) if len(axes) >= 4 else axes[:2]
-                        y = -y
-                        node.send_output(
-                            f"joystick_x_{side}",
-                            pa.array([x], type=pa.float32()),
-                            metadata,
-                        )
-                        node.send_output(
-                            f"joystick_y_{side}",
-                            pa.array([y], type=pa.float32()),
-                            metadata,
-                        )
-        await websocket.close()
-    except WebSocketDisconnect:
-        pass
-
-
-@app.get("/calibration")
-async def _calibration_endpoint():
-    """Tell the front-end whether this session is a calibrating one.
-
-    The instructions are drawn in the headset only then: they tell the
-    operator to hold Y and turn their head, which is the one thing they
-    must not be told when the button means something else.
+    The smoothers and the pivot calibration are stateful, and a new
+    session must not inherit the last one's history, so ``session-start``
+    replaces this wholesale rather than clearing it piece by piece.
     """
-    return {"enabled": _CALIBRATION_ENABLED}
+
+    def __init__(self):
+        """Start with fresh smoothers and no frame seen yet."""
+        self.smoothers = {
+            "right": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
+            "left": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
+        }
+        self.pivot_calibration = _PivotCalibration(enabled=_CALIBRATION_ENABLED)
+        self.last_sequence = -1
 
 
-# The head camera routes are registered before the static files are
-# mounted on "/" because the mount matches every remaining path.
-video.register_routes(app, lambda: server.should_exit)
+def _process_frame(response, state):
+    """Publish dora outputs for one frame message.
+
+    Frames ride an unordered channel that never retransmits, so one can
+    arrive after a newer one has already been published. Publishing it
+    would drag the arms back to a pose the operator has left, so a frame
+    whose ``sequence`` is not newer than the newest processed one is
+    dropped. A frame without ``sequence`` is always processed.
+    """
+    sequence = response.get("sequence")
+    if sequence is not None:
+        if sequence <= state.last_sequence:
+            return
+        state.last_sequence = sequence
+    metadata = {"timestamp": time.time_ns()}
+    smoother_time = time.perf_counter()
+    # An absent button is a released one, so a controller that falls
+    # asleep mid-run cannot leave the hands stopped. The client only
+    # sends the buttons on the profiles it knows, and on those it sends
+    # them every frame.
+    samples = state.pivot_calibration.update(bool(response.get("button_y")))
+    if samples is not None:
+        # Back to the headset as well as the node's output: the operator
+        # cannot see the output while wearing one.
+        webrtc_server.send_control(_apply_pivot_calibration(samples))
+    node.send_output(
+        "vr_receive_times",
+        pa.array([metadata["timestamp"]], type=pa.int64()),
+        metadata,
+    )
+    reference = response.get("pose_reference")
+    if reference:
+        node.send_output(
+            "pose_reference",
+            _build_head_pose_output(reference),
+            metadata,
+        )
+        state.pivot_calibration.add(reference)
+    for button in ["a", "b", "x", "y"]:
+        name = f"button_{button}"
+        if name in response:
+            node.send_output(
+                name,
+                pa.array([bool(response[name])], type=pa.bool_()),
+                metadata,
+            )
+    for side in ["right", "left"]:
+        pose = f"pose_{side}"
+        trigger = f"trigger_{side}"
+        # The hands stop while a run is under way. Turning the head moves
+        # the target by the very arc being measured, and the operator is
+        # shaking their head, not reaching. Without --calibration no run
+        # is ever under way.
+        if (
+            pose in response
+            and trigger in response
+            and reference
+            and not state.pivot_calibration.collecting
+        ):
+            smoother = state.smoothers[side]
+            adjusted_pose = _adjust_pose(
+                response[pose], reference, smoother, smoother_time
+            )
+            gripper_angle = _map_trigger_to_gripper(response[trigger], side)
+            gripper_array = np.array([gripper_angle], dtype=np.float32)
+            pose_with_gripper = np.concatenate([adjusted_pose, gripper_array])
+            node.send_output(
+                pose,
+                _build_pose_output(pose_with_gripper),
+                metadata,
+            )
+        if trigger in response:
+            node.send_output(
+                trigger,
+                pa.array([response[trigger]], type=pa.float32()),
+                metadata,
+            )
+        grip = f"grip_{side}"
+        if grip in response:
+            node.send_output(
+                grip,
+                pa.array([response[grip]], type=pa.float32()),
+                metadata,
+            )
+        joystick = f"joystick_{side}"
+        if joystick in response:
+            axes = response[joystick]
+            # The xr-standard mapping reserves the first axis pair for
+            # the touchpad and the second for the thumbstick, so the
+            # stick is axes[2:4] wherever the controller has one; a
+            # device with only a touchpad reports that pair alone and it
+            # takes its place. The y sign is flipped to keep the
+            # convention the Unity sender published, which is the one the
+            # downstream nodes were written against.
+            x, y = (axes[2], axes[3]) if len(axes) >= 4 else axes[:2]
+            y = -y
+            node.send_output(
+                f"joystick_x_{side}",
+                pa.array([x], type=pa.float32()),
+                metadata,
+            )
+            node.send_output(
+                f"joystick_y_{side}",
+                pa.array([y], type=pa.float32()),
+                metadata,
+            )
+
+
+def _on_frame(payload):
+    """Hand one frame message from the transport to the pose pipeline."""
+    _process_frame(payload, _state)
+
+
+def _on_session_start():
+    """Begin a session: fresh smoothers, fresh frame numbering."""
+    global _state
+    _state = _ConnectionState()
+    node.send_output("status", pa.array(["ready"]), {"timestamp": time.time_ns()})
+
+
+@app.post("/offer")
+async def _offer_endpoint(offer: dict):
+    """Answer a browser's SDP offer.
+
+    Only reachable when this node serves the page itself. In WebRTC-only
+    mode the offer arrives at startup instead and no HTTP server runs.
+    """
+    return {"sdp": await webrtc_server.answer(offer["sdp"]), "type": "answer"}
 
 
 base_dir = os.path.dirname(__file__)
 app.mount("/", StaticFiles(directory=f"{base_dir}/static", html=True), name="static")
 
 
+def _serving():
+    """Whether the node should keep running, in either signaling mode.
+
+    In WebRTC-only mode the one browser leaving ends the session: with
+    no HTTP server, no other browser can ever take its place.
+    """
+    if not _running:
+        return False
+    return webrtc_server is None or webrtc_server.running
+
+
+def _stop():
+    """Stop both halves, whichever noticed first."""
+    global _running
+    _running = False
+    if server is not None:
+        server.should_exit = True
+
+
 async def _main_uvicorn():
     await server.serve()
+    _stop()
 
 
 async def _main_dora():
-    while not server.should_exit:
+    while _serving():
         if node.is_empty():
             await asyncio.sleep(0.001)
             continue
         event = node.next()
-        if event["type"] == "STOP":
+        # None is the event stream closing under us, which is how a
+        # dataflow being torn down can look from here: treat it like
+        # STOP rather than crashing out of the loop with _stop() unrun.
+        if event is None or event["type"] == "STOP":
             break
         video.handle_event(event)
-    server.should_exit = True
+    _stop()
 
 
-async def _main_async():
+async def _main_hosted():
+    """Serve the page over HTTPS and answer offers posted to it."""
     config = uvicorn.Config(
         app,
         host=args.host,
@@ -676,6 +723,10 @@ async def _main_async():
         ssl_keyfile=args.tls_key_file,
         ssl_certfile=args.tls_certificate_file,
         log_level="info",
+        # The headset's browser keeps idle keep-alive sockets open, and
+        # uvicorn's graceful shutdown would wait on them forever ("Waiting
+        # for connections to close"). Give it a moment, then go.
+        timeout_graceful_shutdown=3,
     )
     global server
     server = uvicorn.Server(config)
@@ -683,8 +734,59 @@ async def _main_async():
     task_uvicorn = asyncio.create_task(_main_uvicorn())
     task_dora = asyncio.create_task(_main_dora())
 
-    await task_uvicorn
     await task_dora
+    # The peers are closed before uvicorn is waited on: its graceful
+    # shutdown can sit on a browser's idle keep-alive sockets, and the
+    # headset must hear the close -- and end its session -- without
+    # waiting behind that.
+    await webrtc_server.close()
+    await task_uvicorn
+
+
+async def _main_webrtc_only():
+    """Run the single peer whose offer was handed in at startup.
+
+    This is a one-shot connection: the offer is fixed at startup, so the
+    node runs that one peer for its whole life and reconnecting means
+    restarting the node.
+    """
+    task_dora = asyncio.create_task(_main_dora())
+    try:
+        await webrtc_server.negotiate_oneshot(
+            args.offer,
+            args.answer_host,
+            args.answer_port,
+            args.connect_timeout,
+        )
+    except (OSError, RuntimeError) as error:
+        # Nobody applied the answer, or the media path never came up.
+        # Exiting lets a supervisor restart us for a fresh offer.
+        print(f"WebRTC-only mode failed: {error}", flush=True)
+        _stop()
+    await task_dora
+    await webrtc_server.close()
+
+
+async def _main_async():
+    global webrtc_server, _state
+    _state = _ConnectionState()
+    webrtc_server = webrtc.WebRTCServer(
+        on_frame=_on_frame,
+        on_session_start=_on_session_start,
+        calibration_enabled=_CALIBRATION_ENABLED,
+    )
+    if args.offer:
+        await _main_webrtc_only()
+    else:
+        await _main_hosted()
+
+
+def _answer_port_default():
+    """Return the answer port from ANSWER_PORT, or None if it is unset."""
+    raw = os.getenv("ANSWER_PORT")
+    if raw is None:
+        return None
+    return int(raw)
 
 
 def _environment_flag(name):
@@ -711,21 +813,48 @@ def main():
         default=os.getenv("HOST", "0.0.0.0"),
         help="Server host (default: 0.0.0.0)",
     )
-    tls_certificate_file_default = os.getenv("TLS_CERTIFICATE_FILE")
     parser.add_argument(
         "--tls-certificate-file",
         type=pathlib.Path,
-        default=tls_certificate_file_default,
-        required=tls_certificate_file_default is None,
-        help="TLS certificate file",
+        default=os.getenv("TLS_CERTIFICATE_FILE"),
+        help="TLS certificate file. Required unless --offer is given",
     )
-    tls_key_file_default = os.getenv("TLS_KEY_FILE")
     parser.add_argument(
         "--tls-key-file",
         type=pathlib.Path,
-        default=tls_key_file_default,
-        required=tls_key_file_default is None,
-        help="TLS key file for the certificate file",
+        default=os.getenv("TLS_KEY_FILE"),
+        help=(
+            "TLS key file for the certificate file. Required unless --offer is given"
+        ),
+    )
+    parser.add_argument(
+        "--offer",
+        type=str,
+        default=os.getenv("OFFER"),
+        help=(
+            "Browser SDP offer, which runs the node as a pure WebRTC peer "
+            "with no HTTP server: another service hosts the page and brokers "
+            "signaling, so no TLS certificate is needed. --host, --port and "
+            "the TLS options are ignored"
+        ),
+    )
+    parser.add_argument(
+        "--answer-host",
+        type=str,
+        default=os.getenv("ANSWER_HOST", "127.0.0.1"),
+        help="Host to write the SDP answer to (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--answer-port",
+        type=int,
+        default=_answer_port_default(),
+        help="Port to write the SDP answer to",
+    )
+    parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=float(os.getenv("CONNECT_TIMEOUT", "60")),
+        help="Seconds to wait for the browser to connect (default: 60)",
     )
     parser.add_argument(
         "--calibration",
@@ -746,6 +875,18 @@ def main():
 
     global args
     args = parser.parse_args()
+
+    # argparse cannot express "required unless another option is given",
+    # and WebXR only runs on an HTTPS page, so the certificate is required
+    # of every mode that serves the page itself.
+    if args.offer:
+        if args.answer_port is None:
+            parser.error("--answer-port is required with --offer")
+    elif args.tls_certificate_file is None or args.tls_key_file is None:
+        parser.error(
+            "--tls-certificate-file and --tls-key-file are required unless "
+            "--offer is given"
+        )
 
     video.configure(args)
 

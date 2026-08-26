@@ -24,8 +24,10 @@
 // The camera sees less than the headset shows, so the panel covers the
 // field of view it is given and leaves the rest of the display empty.
 // Giving it more than the camera really sees fills more of the view but
-// magnifies. All of these numbers come from the node over
-// `/view_configuration`.
+// magnifies. All of these numbers come from the node, which pushes them
+// over the "control" data channel when the connection opens.
+
+import { createVideoSource } from "./video-source.js";
 
 const VERTEX_SHADER = `
 attribute vec2 a_corner;
@@ -58,8 +60,6 @@ void main() {
 `;
 
 const EYES = ["left", "right"];
-// Must match EYE_PREFIX in video.py.
-const EYE_BY_PREFIX = { 0: "left", 1: "right" };
 
 // Used when the configuration misses the stereo-only sections.
 const DEFAULT_CAMERA = { horizontal_fov: 79.4, vertical_fov: 50.1 };
@@ -81,34 +81,18 @@ class StereoPanel {
   #attributes = {};
   #uniforms = {};
   #textures = {};
-  #pending = { left: null, right: null };
+  #sources = { left: null, right: null };
   #size = { width: 0, height: 0 };
   #configuration = null;
-  #websocket = null;
 
-  constructor(configuration) {
+  constructor(configuration, tracks) {
     this.#configuration = configuration;
-
-    const websocket = new WebSocket("wss://" + location.host + "/video");
-    websocket.binaryType = "arraybuffer";
-    websocket.addEventListener("message", (event) => {
-      const message = new Uint8Array(event.data);
-      const eye = EYE_BY_PREFIX[message[0]];
-      if (eye === undefined) {
-        return;
-      }
-      const jpeg = message.subarray(1);
-      createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
-        .then((bitmap) => {
-          // Drop anything still waiting; it is already stale.
-          if (this.#pending[eye]) {
-            this.#pending[eye].close();
-          }
-          this.#pending[eye] = bitmap;
-        })
-        .catch(() => {});
-    });
-    this.#websocket = websocket;
+    // An eye the node is not sending simply has no source; the other
+    // eye still draws, which beats a black screen in a headset.
+    for (const eye of EYES) {
+      const track = tracks ? tracks[eye] : null;
+      this.#sources[eye] = track ? createVideoSource(track) : null;
+    }
   }
 
   // Called once the WebXR session has created its WebGL context.
@@ -157,24 +141,17 @@ class StereoPanel {
   }
 
   #upload() {
-    const gl = this.#gl;
     for (const eye of EYES) {
-      const bitmap = this.#pending[eye];
-      if (!bitmap) {
+      const source = this.#sources[eye];
+      if (!source) {
         continue;
       }
-      gl.bindTexture(gl.TEXTURE_2D, this.#textures[eye]);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        bitmap,
-      );
-      this.#size = { width: bitmap.width, height: bitmap.height };
-      bitmap.close();
-      this.#pending[eye] = null;
+      // Keep the previous size when there is no new frame: the panel is
+      // still showing the last one, so its shape must not change.
+      const size = source.upload(this.#gl, this.#textures[eye]);
+      if (size) {
+        this.#size = size;
+      }
     }
   }
 
@@ -246,19 +223,15 @@ class StereoPanel {
   }
 
   close() {
-    if (this.#websocket) {
-      this.#websocket.close();
-      this.#websocket = null;
-    }
     for (const eye of EYES) {
-      if (this.#pending[eye]) {
-        this.#pending[eye].close();
-        this.#pending[eye] = null;
+      if (this.#sources[eye]) {
+        this.#sources[eye].close();
+        this.#sources[eye] = null;
       }
     }
   }
 }
 
-export function createStereoPanel(configuration) {
-  return new StereoPanel(configuration);
+export function createStereoPanel(configuration, tracks) {
+  return new StereoPanel(configuration, tracks);
 }

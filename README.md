@@ -6,6 +6,12 @@ controller state of a VR device such as Meta Quest 3 or PICO 4 through
 and publishes them to a dora-rs dataflow. You can use it for OpenArm
 teleoperation with a VR device.
 
+Everything the VR device and this node say to each other rides one
+WebRTC peer connection: controller poses arrive on an unreliable data
+channel, and the head camera leaves on video tracks. Poses are dropped
+rather than retransmitted, because only the newest pose is worth
+anything to a robot.
+
 ## Install
 
 ```bash
@@ -18,10 +24,10 @@ This dora-rs node starts a Web server because WebXR runs as JavaScript
 in the Web browser on a VR device. The VR device connects to this
 server to stream its pose and controller state.
 
-WebXR requires HTTPS, so this dora-rs node needs a certificate. A
-self-signed certificate is enough because the dora-rs node and the VR
-device communicate only within your local network. You can generate
-one with
+WebXR requires HTTPS of any page it runs in, so a node that serves the
+page itself needs a certificate. A self-signed certificate is enough
+because the dora-rs node and the VR device communicate only within your
+local network. You can generate one with
 [`example/prepare_tls.sh`](example/prepare_tls.sh):
 
 ```bash
@@ -69,6 +75,45 @@ warning. You can continue to the page from its "Advanced" options.
 
 Press the "Start" button on the page to start teleoperation with your
 VR device.
+
+## WebRTC-only mode
+
+By default this node serves the page itself, which is why it needs a
+certificate. Pass `--offer` (or set `OFFER`) to run it as a pure WebRTC
+peer instead, with **no HTTP server and no certificate at all**: another
+service hosts the page and brokers signaling, and this node only runs
+the robot side of the connection.
+
+This is what removes the certificate from the robot machine. WebRTC
+authenticates itself with a self-signed certificate and an SDP
+fingerprint rather than a CA, so the peer that answers needs nothing
+installed; the HTTPS that WebXR insists on is the hosting service's
+problem, and it already has a certificate a browser trusts. No
+`prepare_tls.sh`, and no security warning to step through on the
+headset.
+
+- `--offer` / `OFFER` — the browser's SDP offer, handed in at startup.
+  Just the bare SDP; the type is always `offer`.
+- `--answer-host` / `ANSWER_HOST` (default `127.0.0.1`) and
+  `--answer-port` / `ANSWER_PORT` — the TCP host and port this node
+  connects to and writes the answer SDP to (then closes). The service
+  listening there wraps it back into an `answer` and relays it to the
+  browser.
+- `--connect-timeout` / `CONNECT_TIMEOUT` (default 60) — how long to
+  wait for the browser to connect after the answer is sent. If the
+  connection never comes up, the node exits instead of holding a dead
+  peer, so a supervisor can restart it for a fresh offer.
+
+This is a **one-shot** connection: the offer is fixed at startup, so the
+node runs that single peer for its whole life and reconnecting means
+restarting the node. When the browser disconnects, the node exits, since
+no other browser can ever take its place. `--host`, `--port` and the TLS
+options are ignored in this mode.
+
+The page hosted elsewhere is told how to draw itself over the connection
+rather than over HTTP: the node pushes the view configuration and the
+calibration flag on a reliable `control` data channel as soon as it
+opens. A page this node never served still gets the right view.
 
 ## Head camera
 
@@ -255,8 +300,12 @@ useful in a dora-rs dataflow YAML.
 |--------------------------|------------------------|-------------|-----------------------------------------------------------------------------------|
 | `--host`                 | `HOST`                 | `0.0.0.0`   | The host that the Web server listens on.                                          |
 | `--port`                 | `PORT`                 | `8443`      | The port that the Web server listens on.                                          |
-| `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS.        |
-| `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required because WebXR requires HTTPS. |
+| `--tls-certificate-file` | `TLS_CERTIFICATE_FILE` | (required)  | The TLS certificate file for HTTPS. Required because WebXR requires HTTPS, unless `--offer` is given. |
+| `--tls-key-file`         | `TLS_KEY_FILE`         | (required)  | The TLS key file for the certificate file. Required unless `--offer` is given.    |
+| `--offer`                | `OFFER`                | (none)      | The browser's SDP offer. Runs the node as a pure WebRTC peer with no HTTP server and no certificate. See [WebRTC-only mode](#webrtc-only-mode). |
+| `--answer-host`          | `ANSWER_HOST`          | `127.0.0.1` | The host to write the SDP answer to in WebRTC-only mode.                          |
+| `--answer-port`          | `ANSWER_PORT`          | (required with `--offer`) | The port to write the SDP answer to in WebRTC-only mode.            |
+| `--connect-timeout`      | `CONNECT_TIMEOUT`      | `60`        | Seconds to wait for the browser to connect in WebRTC-only mode.                   |
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
 | `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
 | `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |
