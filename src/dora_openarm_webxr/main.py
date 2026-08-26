@@ -705,7 +705,10 @@ async def _main_dora():
             await asyncio.sleep(0.001)
             continue
         event = node.next()
-        if event["type"] == "STOP":
+        # None is the event stream closing under us, which is how a
+        # dataflow being torn down can look from here: treat it like
+        # STOP rather than crashing out of the loop with _stop() unrun.
+        if event is None or event["type"] == "STOP":
             break
         video.handle_event(event)
     _stop()
@@ -720,6 +723,10 @@ async def _main_hosted():
         ssl_keyfile=args.tls_key_file,
         ssl_certfile=args.tls_certificate_file,
         log_level="info",
+        # The headset's browser keeps idle keep-alive sockets open, and
+        # uvicorn's graceful shutdown would wait on them forever ("Waiting
+        # for connections to close"). Give it a moment, then go.
+        timeout_graceful_shutdown=3,
     )
     global server
     server = uvicorn.Server(config)
@@ -727,8 +734,13 @@ async def _main_hosted():
     task_uvicorn = asyncio.create_task(_main_uvicorn())
     task_dora = asyncio.create_task(_main_dora())
 
-    await task_uvicorn
     await task_dora
+    # The peers are closed before uvicorn is waited on: its graceful
+    # shutdown can sit on a browser's idle keep-alive sockets, and the
+    # headset must hear the close -- and end its session -- without
+    # waiting behind that.
+    await webrtc_server.close()
+    await task_uvicorn
 
 
 async def _main_webrtc_only():

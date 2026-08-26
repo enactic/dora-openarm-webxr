@@ -319,6 +319,20 @@ class WebRTCServer:
             def on_message(message: object) -> None:
                 self._handle_frame_message(message)
 
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange() -> None:
+            # A browser that leaves without closing -- a reload, a
+            # sleeping headset -- is only ever noticed here. Left alone,
+            # the peer's video encoders would keep running for nobody
+            # until the node exits, and every reload would stack another
+            # one on. Only the terminal states count: "disconnected" is
+            # also what a brief network blip looks like, and that can
+            # still recover.
+            if pc.connectionState in ("failed", "closed"):
+                self._pcs.discard(pc)
+                self._controls.discard(control)
+                await pc.close()
+
         return pc
 
     def _handle_control_message(self, message: object) -> None:

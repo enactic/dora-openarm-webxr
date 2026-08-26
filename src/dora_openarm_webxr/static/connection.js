@@ -103,11 +103,25 @@ export async function connect({ signal = postOffer } = {}) {
   });
 
   const configured = new Promise((resolve, reject) => {
+    // The node going away is noticed in two ways, and either must end
+    // the session. The reliable channel closes almost instantly when
+    // the node shuts down cleanly; the connection state only reaches
+    // "failed" after an ICE timeout, long after a node that died
+    // without a word. The channel close is the fast path, the state
+    // change the last resort.
+    function lost() {
+      reject(new Error("the connection to the node was lost"));
+      if (!closed && handlers.close) {
+        closed = true;
+        handlers.close();
+      }
+    }
     pc.addEventListener("datachannel", (event) => {
       if (event.channel.label !== "control") {
         return;
       }
       control = event.channel;
+      control.addEventListener("close", lost);
       control.addEventListener("message", (message) => {
         let payload;
         try {
@@ -127,11 +141,7 @@ export async function connect({ signal = postOffer } = {}) {
     });
     pc.addEventListener("connectionstatechange", () => {
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-        reject(new Error("the connection to the node failed"));
-        if (!closed && handlers.close) {
-          closed = true;
-          handlers.close();
-        }
+        lost();
       }
     });
   });
