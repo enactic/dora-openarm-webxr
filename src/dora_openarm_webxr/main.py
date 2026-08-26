@@ -547,10 +547,10 @@ def _process_frame(response, state):
     Frames ride an unordered channel that never retransmits, so one can
     arrive after a newer one has already been published. Publishing it
     would drag the arms back to a pose the operator has left, so a frame
-    whose ``seq`` is not newer than the newest processed one is dropped.
-    A frame without ``seq`` is always processed.
+    whose ``sequence`` is not newer than the newest processed one is
+    dropped. A frame without ``sequence`` is always processed.
     """
-    sequence = response.get("seq")
+    sequence = response.get("sequence")
     if sequence is not None:
         if sequence <= state.last_sequence:
             return

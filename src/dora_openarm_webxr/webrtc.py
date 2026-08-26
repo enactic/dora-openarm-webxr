@@ -27,7 +27,7 @@ Two data channels, split by what they can afford to lose:
   Carries the ``frame`` messages at the WebXR animation frame rate
   (72-120 Hz on a Quest 3). Only the newest pose is worth anything, so a
   lost frame is dropped rather than retransmitted; the next one
-  supersedes it. Frames carry a ``seq`` so the receiver can drop the
+  supersedes it. Frames carry a ``sequence`` so the receiver can drop the
   stale ones an unordered channel occasionally delivers late.
 * ``control`` -- opened by this node, reliable and ordered. Carries the
   things that must not be lost: the node pushes the view configuration

@@ -24,7 +24,7 @@
 // unordered and never retransmitted, and carries the frame messages at
 // the animation frame rate: only the newest pose is worth anything, so a
 // lost frame is dropped rather than retransmitted. Each frame carries a
-// "seq" so the node can drop the stale ones an unordered channel
+// "sequence" so the node can drop the stale ones an unordered channel
 // occasionally delivers late. "control" is reliable and carries what must
 // not be lost: the node's configuration push, session-start, the select
 // and squeeze events, and what came of a calibration run.
@@ -164,7 +164,7 @@ export async function connect({ signal = postOffer } = {}) {
         return;
       }
       sequence += 1;
-      xr.send(JSON.stringify({ ...message, seq: sequence }));
+      xr.send(JSON.stringify({ ...message, sequence }));
     },
     sendControl(message) {
       if (control && control.readyState === "open") {
