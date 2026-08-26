@@ -19,7 +19,7 @@ authors = [{ name = "Enactic, Inc." }]
 description = "dora-rs node that provides WebXR server for VR OpenArm teleoperation"
 license = { text = "Apache-2.0" }
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 dependencies = [
   "aiortc >= 1.9",
