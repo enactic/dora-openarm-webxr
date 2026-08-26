@@ -124,8 +124,7 @@ class _EyeVideoTrack(VideoStreamTrack):
                 if not self._warned_decode:
                     self._warned_decode = True
                     print(
-                        f"WARNING: the {self._eye} camera input is not "
-                        "decodable JPEG",
+                        f"WARNING: the {self._eye} camera input is not decodable JPEG",
                         flush=True,
                     )
                 continue
@@ -197,7 +196,9 @@ class WebRTCServer:
     async def answer(self, offer_sdp: str) -> str:
         """Answer one offer and return the bare answer SDP."""
         pc = self._create_peer()
-        return await self._answer(pc, RTCSessionDescription(sdp=offer_sdp, type="offer"))
+        return await self._answer(
+            pc, RTCSessionDescription(sdp=offer_sdp, type="offer")
+        )
 
     async def negotiate_oneshot(
         self,
