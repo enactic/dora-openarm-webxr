@@ -132,6 +132,17 @@ _NECK_PIVOT_OFFSET: np.ndarray = np.array([0.0, -0.075, 0.080], dtype=np.float32
 # can start by accident.
 _CALIBRATION_ENABLED: bool = False
 
+# The controller buttons published as outputs, and the names --quit-button
+# accepts.
+_BUTTONS = ("a", "b", "x", "y")
+
+# The buttons that shut the node down when pressed, from --quit-button.
+# Empty unless asked for, for the same reason --calibration is off by
+# default: the buttons are outputs in their own right, and quitting is a
+# thing the operator sets out to do, not something a press wired to
+# another purpose can do by accident.
+_QUIT_BUTTONS: tuple = ()
+
 # Where an accepted run is written and where a saved one is read back from, at
 # startup, from --neck-pivot-file. A fit lives as long as the session
 # otherwise, and the whole point of measuring an operator is keeping the number
@@ -579,14 +590,17 @@ def _process_frame(response, state):
             metadata,
         )
         state.pivot_calibration.add(reference)
-    for button in ["a", "b", "x", "y"]:
+    for button in _BUTTONS:
         name = f"button_{button}"
         if name in response:
+            pressed = bool(response[name])
             node.send_output(
                 name,
-                pa.array([bool(response[name])], type=pa.bool_()),
+                pa.array([pressed], type=pa.bool_()),
                 metadata,
             )
+            if pressed and button in _QUIT_BUTTONS:
+                _stop()
     for side in ["right", "left"]:
         pose = f"pose_{side}"
         trigger = f"trigger_{side}"
@@ -789,6 +803,18 @@ def _answer_port_default():
     return int(raw)
 
 
+def _quit_buttons_from_environment():
+    """Return the quit buttons from QUIT_BUTTON, or [] if it is unset.
+
+    Comma-separated, so the environment can name several buttons the way
+    repeating --quit-button does.
+    """
+    raw = os.getenv("QUIT_BUTTON")
+    if raw is None:
+        return []
+    return [button.strip() for button in raw.split(",") if button.strip()]
+
+
 def _environment_flag(name):
     """Read an on/off option's environment variable.
 
@@ -857,6 +883,16 @@ def main():
         help="Seconds to wait for the browser to connect (default: 60)",
     )
     parser.add_argument(
+        "--quit-button",
+        action="append",
+        choices=list(_BUTTONS),
+        help=(
+            "Controller button that shuts the node down when pressed. May be "
+            "repeated for several buttons; the QUIT_BUTTON environment "
+            "variable takes a comma-separated list (default: none)"
+        ),
+    )
+    parser.add_argument(
         "--calibration",
         action="store_true",
         default=_environment_flag("CALIBRATION"),
@@ -888,11 +924,31 @@ def main():
             "--offer is given"
         )
 
+    # Resolved here, not as the argparse default: with action="append",
+    # command-line buttons would be added to an environment default
+    # instead of replacing it. The values also need checking by hand,
+    # because argparse never checks a default against choices.
+    quit_buttons = args.quit_button
+    if quit_buttons is None:
+        quit_buttons = _quit_buttons_from_environment()
+    for button in quit_buttons:
+        if button not in _BUTTONS:
+            parser.error(
+                f"QUIT_BUTTON must name buttons among {', '.join(_BUTTONS)}, "
+                f"not {button!r}"
+            )
+    if args.calibration and "y" in quit_buttons:
+        parser.error(
+            "--quit-button y conflicts with --calibration, which uses the Y "
+            "button to measure the neck pivot"
+        )
+
     video.configure(args)
 
-    global _CALIBRATION_ENABLED, _NECK_PIVOT_FILE
+    global _CALIBRATION_ENABLED, _NECK_PIVOT_FILE, _QUIT_BUTTONS
     _CALIBRATION_ENABLED = args.calibration
     _NECK_PIVOT_FILE = args.neck_pivot_file
+    _QUIT_BUTTONS = tuple(quit_buttons)
 
     # Read once at startup; restart the dataflow to apply a change.
     pose_configuration = video.view_configuration().get("pose") or {}

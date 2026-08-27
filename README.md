@@ -306,6 +306,7 @@ useful in a dora-rs dataflow YAML.
 | `--answer-host`          | `ANSWER_HOST`          | `127.0.0.1` | The host to write the SDP answer to in WebRTC-only mode.                          |
 | `--answer-port`          | `ANSWER_PORT`          | (required with `--offer`) | The port to write the SDP answer to in WebRTC-only mode.            |
 | `--connect-timeout`      | `CONNECT_TIMEOUT`      | `60`        | Seconds to wait for the browser to connect in WebRTC-only mode.                   |
+| `--quit-button`          | `QUIT_BUTTON`          | (none)      | The controller button (`a`, `b`, `x` or `y`) that shuts the node down when pressed. May be repeated for several buttons; the environment variable takes a comma-separated list. |
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
 | `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
 | `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |
