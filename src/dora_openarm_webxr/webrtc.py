@@ -92,16 +92,16 @@ def parse_ice_servers(text: str) -> list[RTCIceServer]:
     same list -- short-lived TURN credentials included -- with no
     translation on either side.
 
-    Raises ValueError if the JSON is not such a list, so a caller can
-    turn a malformed configuration into a startup error instead of a
-    peer that quietly cannot connect.
+    Raises ValueError -- or TypeError when the JSON is not a list at
+    all -- so a caller can turn a malformed configuration into a
+    startup error instead of a peer that quietly cannot connect.
     """
     try:
         servers = json.loads(text)
     except json.JSONDecodeError as error:
         raise ValueError(f"not JSON: {error}") from error
     if not isinstance(servers, list):
-        raise ValueError(f"not a list: {servers!r}")
+        raise TypeError(f"not a list: {servers!r}")
     parsed = []
     for server in servers:
         if not isinstance(server, dict) or "urls" not in server:

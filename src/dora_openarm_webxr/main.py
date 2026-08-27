@@ -970,7 +970,7 @@ def main():
     if args.ice_servers:
         try:
             ice_servers = webrtc.parse_ice_servers(args.ice_servers)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             parser.error(f"--ice-servers: {error}")
 
     video.configure(args)

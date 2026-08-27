@@ -390,7 +390,7 @@ def test_parse_ice_servers_malformed():
     # into a startup error instead of a peer that quietly cannot connect.
     with pytest.raises(ValueError, match="not JSON"):
         webrtc.parse_ice_servers("{")
-    with pytest.raises(ValueError, match="not a list"):
+    with pytest.raises(TypeError, match="not a list"):
         webrtc.parse_ice_servers('{"urls": "stun:stun.example.com:3478"}')
     with pytest.raises(ValueError, match='"urls"'):
         webrtc.parse_ice_servers('[{"username": "user"}]')
