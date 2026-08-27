@@ -135,6 +135,22 @@ def test_frame_without_sequence_processed(node):
     assert node.ids().count("button_a") == 2
 
 
+def test_quit_button(node, monkeypatch):
+    # A configured quit button shuts the node down straight from the
+    # controller, without needing a downstream quitter node.
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a", "b"))
+    monkeypatch.setattr(main, "_running", True)
+    state = main._ConnectionState()
+    main._process_frame(
+        {"type": "frame", "sequence": 1, "button_b": False, "button_x": True}, state
+    )
+    assert main._running
+    main._process_frame({"type": "frame", "sequence": 2, "button_b": True}, state)
+    assert not main._running
+    # The press still reaches the dataflow like any other button.
+    assert node.ids().count("button_b") == 2
+
+
 def test_session_start_resets_state(node, monkeypatch):
     # A new session must not inherit the last one's smoother history or
     # frame numbering: a reconnecting browser starts its "sequence" over.
