@@ -46,22 +46,21 @@ a ``STOP`` event, or, in WebRTC-only mode, when the one browser leaves.
 import argparse
 import asyncio
 import collections
-import dora
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-import numpy as np
 import os
 import pathlib
-import pyarrow as pa
-from scipy.spatial.transform import Rotation
 import time
+
+import dora
+import numpy as np
+import pyarrow as pa
 import uvicorn
 import yaml
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from scipy.spatial.transform import Rotation
 
+from . import calibration, video, webrtc
 from .smoothing import OneEuroPoseSmoother
-from . import calibration
-from . import video
-from . import webrtc
 
 args = None
 node = None
@@ -971,7 +970,7 @@ def main():
     if args.ice_servers:
         try:
             ice_servers = webrtc.parse_ice_servers(args.ice_servers)
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             parser.error(f"--ice-servers: {error}")
 
     video.configure(args)

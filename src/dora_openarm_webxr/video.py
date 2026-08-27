@@ -28,8 +28,8 @@ import argparse
 import asyncio
 import os
 import pathlib
-import yaml
 
+import yaml
 
 # dora-rs input IDs mapped to the eye that the frame is rendered on.
 # The default mono view uses only the right eye; the stereo view uses
