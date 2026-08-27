@@ -359,3 +359,83 @@ async def _run_oneshot_timeout(server):
     finally:
         await pc.close()
         await server.close()
+
+
+def test_parse_ice_servers():
+    # The JSON is the iceServers list a browser RTCPeerConnection takes,
+    # so the signaling service can hand this node the very list it sends
+    # its browsers, TURN credentials included.
+    servers = webrtc.parse_ice_servers(
+        json.dumps(
+            [
+                {
+                    "urls": ["turn:turn.example.com:3478"],
+                    "username": "user",
+                    "credential": "pass",
+                },
+                {"urls": "stun:stun.example.com:3478"},
+            ]
+        )
+    )
+    assert [
+        (server.urls, server.username, server.credential) for server in servers
+    ] == [
+        (["turn:turn.example.com:3478"], "user", "pass"),
+        ("stun:stun.example.com:3478", None, None),
+    ]
+
+
+def test_parse_ice_servers_malformed():
+    # A malformed list must fail at parse time, so the caller can turn it
+    # into a startup error instead of a peer that quietly cannot connect.
+    with pytest.raises(ValueError, match="not JSON"):
+        webrtc.parse_ice_servers("{")
+    with pytest.raises(ValueError, match="not a list"):
+        webrtc.parse_ice_servers('{"urls": "stun:stun.example.com:3478"}')
+    with pytest.raises(ValueError, match='"urls"'):
+        webrtc.parse_ice_servers('[{"username": "user"}]')
+
+
+def _capture_ice_servers(monkeypatch):
+    real = webrtc.RTCConfiguration
+    captured = []
+
+    def capture(iceServers):
+        captured.append(iceServers)
+        return real(iceServers=iceServers)
+
+    monkeypatch.setattr(webrtc, "RTCConfiguration", capture)
+    return captured
+
+
+async def _create_and_close_peer(server):
+    pc = server._create_peer()
+    await pc.close()
+
+
+def test_peer_built_with_passed_ice_servers(monkeypatch):
+    # Servers handed in at construction reach every peer, replacing the
+    # default: TURN only works with the credentials the service minted.
+    captured = _capture_ice_servers(monkeypatch)
+    turn = webrtc.RTCIceServer(
+        urls=["turn:turn.example.com:3478"], username="user", credential="pass"
+    )
+    server = webrtc.WebRTCServer(
+        on_frame=lambda payload: None,
+        on_session_start=lambda: None,
+        ice_servers=[turn],
+    )
+    asyncio.run(_create_and_close_peer(server))
+    assert captured == [[turn]]
+
+
+def test_peer_built_with_default_ice_servers(monkeypatch):
+    # With none handed in, peers fall back to the module default, which
+    # the autouse fixture has emptied for these offline tests.
+    captured = _capture_ice_servers(monkeypatch)
+    server = webrtc.WebRTCServer(
+        on_frame=lambda payload: None,
+        on_session_start=lambda: None,
+    )
+    asyncio.run(_create_and_close_peer(server))
+    assert captured == [[]]

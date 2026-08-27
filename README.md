@@ -103,6 +103,13 @@ headset.
   wait for the browser to connect after the answer is sent. If the
   connection never comes up, the node exits instead of holding a dead
   peer, so a supervisor can restart it for a fresh offer.
+- `--ice-servers` / `ICE_SERVERS` — the ICE servers to build the peer
+  with, as JSON in the form a browser `RTCPeerConnection` takes:
+  `[{"urls": [...], "username": ..., "credential": ...}]`. This is how
+  the hosting service passes the short-lived TURN credentials it mints,
+  for networks where a direct path cannot be counted on — TURN needs
+  credentials, so it cannot live in a default. Unset or empty, the node
+  uses a public STUN server only.
 
 This is a **one-shot** connection: the offer is fixed at startup, so the
 node runs that single peer for its whole life and reconnecting means

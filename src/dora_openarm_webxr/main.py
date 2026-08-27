@@ -149,6 +149,12 @@ _QUIT_BUTTONS: tuple = ()
 # they measured.
 _NECK_PIVOT_FILE = None
 
+# The ICE servers every peer is built with, from --ice-servers. None means
+# webrtc's default public STUN server; the signaling service passes its own
+# list -- short-lived TURN credentials included -- when a direct path cannot
+# be counted on.
+_ICE_SERVERS = None
+
 
 # How many headset poses a run may hold. A button left held down stops growing
 # here instead of the process, and at the headset's display rate this is some
@@ -788,6 +794,7 @@ async def _main_async():
         on_frame=_on_frame,
         on_session_start=_on_session_start,
         calibration_enabled=_CALIBRATION_ENABLED,
+        ice_servers=_ICE_SERVERS,
     )
     if args.offer:
         await _main_webrtc_only()
@@ -883,6 +890,19 @@ def main():
         help="Seconds to wait for the browser to connect (default: 60)",
     )
     parser.add_argument(
+        "--ice-servers",
+        type=str,
+        default=os.getenv("ICE_SERVERS"),
+        help=(
+            "ICE servers to build every peer with, as JSON in the form a "
+            "browser RTCPeerConnection takes: "
+            '[{"urls": [...], "username": ..., "credential": ...}]. '
+            "This is how a signaling service passes the short-lived TURN "
+            "credentials it mints, for networks where a direct path cannot "
+            "be counted on (default: a public STUN server only)"
+        ),
+    )
+    parser.add_argument(
         "--quit-button",
         action="append",
         choices=list(_BUTTONS),
@@ -943,10 +963,22 @@ def main():
             "button to measure the neck pivot"
         )
 
+    # Parsed at startup so a malformed list is a startup error, not a
+    # peer that quietly cannot connect. An empty value means unset, so a
+    # dataflow YAML can carry ``ICE_SERVERS: ""`` and have it mean the
+    # default.
+    ice_servers = None
+    if args.ice_servers:
+        try:
+            ice_servers = webrtc.parse_ice_servers(args.ice_servers)
+        except ValueError as error:
+            parser.error(f"--ice-servers: {error}")
+
     video.configure(args)
 
-    global _CALIBRATION_ENABLED, _NECK_PIVOT_FILE, _QUIT_BUTTONS
+    global _CALIBRATION_ENABLED, _ICE_SERVERS, _NECK_PIVOT_FILE, _QUIT_BUTTONS
     _CALIBRATION_ENABLED = args.calibration
+    _ICE_SERVERS = ice_servers
     _NECK_PIVOT_FILE = args.neck_pivot_file
     _QUIT_BUTTONS = tuple(quit_buttons)
 
