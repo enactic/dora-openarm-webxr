@@ -72,10 +72,48 @@ VIDEO_TRANSCEIVERS = 2
 
 _STUN_URL = "stun:stun.cloudflare.com:3478"
 
-# The ICE servers every peer is built with. A public STUN server is
-# enough for the hosted case, where the page and the node sit on
-# different networks; on one LAN the host candidates alone connect.
+# The ICE servers a peer is built with when the caller passes none. A
+# public STUN server is enough when a direct path exists; on one LAN
+# the host candidates alone connect. Behind a symmetric NAT or a
+# UDP-blocking firewall only a TURN relay connects, and TURN needs
+# credentials, so it cannot live in a default: the signaling service
+# mints short-lived ones per session and hands them in through
+# ``ice_servers``.
 ICE_SERVERS = [RTCIceServer(urls=[_STUN_URL])]
+
+
+def parse_ice_servers(text: str) -> list[RTCIceServer]:
+    """Parse ICE servers from JSON in the browser's own form.
+
+    The JSON is the ``iceServers`` list an ``RTCPeerConnection`` takes
+    in the browser: objects with ``urls`` (one URL or a list) and, for
+    TURN, ``username`` and ``credential``. The signaling service already
+    sends its browsers exactly this, so it can hand this node the very
+    same list -- short-lived TURN credentials included -- with no
+    translation on either side.
+
+    Raises ValueError if the JSON is not such a list, so a caller can
+    turn a malformed configuration into a startup error instead of a
+    peer that quietly cannot connect.
+    """
+    try:
+        servers = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"not JSON: {error}") from error
+    if not isinstance(servers, list):
+        raise ValueError(f"not a list: {servers!r}")
+    parsed = []
+    for server in servers:
+        if not isinstance(server, dict) or "urls" not in server:
+            raise ValueError(f'not an object with "urls": {server!r}')
+        parsed.append(
+            RTCIceServer(
+                urls=server["urls"],
+                username=server.get("username"),
+                credential=server.get("credential"),
+            )
+        )
+    return parsed
 
 
 class _SharedClock:
@@ -151,11 +189,19 @@ class WebRTCServer:
         on_frame,
         on_session_start,
         calibration_enabled: bool = False,
+        ice_servers: list[RTCIceServer] | None = None,
     ) -> None:
-        """Prepare a server; no peer exists until an offer is answered."""
+        """Prepare a server; no peer exists until an offer is answered.
+
+        ``ice_servers`` is what every peer is built with; None means the
+        default public STUN server. The signaling service passes its own
+        list here when a direct path cannot be counted on, since a TURN
+        relay only works with the short-lived credentials it mints.
+        """
         self._on_frame = on_frame
         self._on_session_start = on_session_start
         self._calibration_enabled = calibration_enabled
+        self._ice_servers = ice_servers
         self._pcs: set = set()
         self._controls: set = set()
         self._running = True
@@ -277,7 +323,10 @@ class WebRTCServer:
 
     def _create_peer(self) -> RTCPeerConnection:
         """Build a peer with its data channels wired up."""
-        configuration = RTCConfiguration(iceServers=list(ICE_SERVERS))
+        ice_servers = self._ice_servers
+        if ice_servers is None:
+            ice_servers = ICE_SERVERS
+        configuration = RTCConfiguration(iceServers=list(ice_servers))
         pc = RTCPeerConnection(configuration)
         self._pcs.add(pc)
 
