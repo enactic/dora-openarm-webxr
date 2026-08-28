@@ -136,6 +136,10 @@ _CALIBRATION_ENABLED: bool = False
 _BUTTONS = ("a", "b", "x", "y")
 
 # The buttons that shut the node down when pressed, from --quit-button.
+# Naming any button also publishes ``"quit"`` on the ``command`` output
+# when the node exits -- however it exits, not just by the button -- which
+# is what a dora-openarm-quitter node listens for, so the rest of the
+# dataflow ends with this node even when an error ends it.
 # Empty unless asked for, for the same reason --calibration is off by
 # default: the buttons are outputs in their own right, and quitting is a
 # thing the operator sets out to do, not something a press wired to
@@ -713,24 +717,62 @@ def _stop():
         server.should_exit = True
 
 
+def _send_quit_command():
+    """Publish ``"quit"`` on the ``command`` output, if --quit-button is on.
+
+    Sent when the dora loop ends rather than when the button goes
+    down, so that every ending says it -- the button, the one browser
+    leaving, an error -- and a dora-openarm-quitter node wired to this
+    output ends the rest of the dataflow whichever of those it was. A
+    node that died of an error and said nothing would leave the
+    downstream nodes running with nobody driving them.
+
+    And sent right then, before the WebRTC peers and the Web server
+    are torn down, because dora only carries outputs from a node it
+    still considers running: waiting until the process is on its way
+    out is waiting until nobody can hear it.
+
+    Gated on --quit-button for the usual reason things are off here by
+    default: ending the whole dataflow is a thing the operator asks
+    for, and a dataflow that never asked keeps its own idea of when to
+    stop.
+    """
+    if not _QUIT_BUTTONS:
+        return
+    try:
+        node.send_output(
+            "command",
+            pa.array(["quit"]),
+            {"timestamp": time.time_ns()},
+        )
+    except Exception as error:  # noqa: BLE001
+        # A dataflow already torn down can refuse the send, and the
+        # quitter is gone with it: nothing is left to tell, so this must
+        # not replace whatever error is already on its way out.
+        print(f"cannot send quit command: {error}", flush=True)
+
+
 async def _main_uvicorn():
     await server.serve()
     _stop()
 
 
 async def _main_dora():
-    while _serving():
-        if node.is_empty():
-            await asyncio.sleep(0.001)
-            continue
-        event = node.next()
-        # None is the event stream closing under us, which is how a
-        # dataflow being torn down can look from here: treat it like
-        # STOP rather than crashing out of the loop with _stop() unrun.
-        if event is None or event["type"] == "STOP":
-            break
-        video.handle_event(event)
-    _stop()
+    try:
+        while _serving():
+            if node.is_empty():
+                await asyncio.sleep(0.001)
+                continue
+            event = node.next()
+            # None is the event stream closing under us, which is how a
+            # dataflow being torn down can look from here: treat it like
+            # STOP rather than crashing out of the loop with _stop() unrun.
+            if event is None or event["type"] == "STOP":
+                break
+            video.handle_event(event)
+    finally:
+        _send_quit_command()
+        _stop()
 
 
 async def _main_hosted():
