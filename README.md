@@ -288,6 +288,7 @@ controller poses are sent only when it is.
 | `button_b`         | `bool`            | Whether the B button is pressed or not.                                                                                                         |
 | `button_x`         | `bool`            | Whether the X button is pressed or not.                                                                                                         |
 | `button_y`         | `bool`            | Whether the Y button is pressed or not.                                                                                                         |
+| `command`          | `string`          | `"quit"` when the node exits, if `--quit-button` is given -- whatever ended the node: the quit button, the browser leaving, or an error. A [dora-openarm-quitter](https://github.com/enactic/dora-openarm-quitter) node wired to this output ends the rest of the dataflow with it. Nothing else is ever published here. |
 
 `button_y` is published whatever the press does here. In a session
 started with `--calibration` it also runs a [neck pivot
@@ -313,7 +314,7 @@ useful in a dora-rs dataflow YAML.
 | `--answer-host`          | `ANSWER_HOST`          | `127.0.0.1` | The host to write the SDP answer to in WebRTC-only mode.                          |
 | `--answer-port`          | `ANSWER_PORT`          | (required with `--offer`) | The port to write the SDP answer to in WebRTC-only mode.            |
 | `--connect-timeout`      | `CONNECT_TIMEOUT`      | `60`        | Seconds to wait for the browser to connect in WebRTC-only mode.                   |
-| `--quit-button`          | `QUIT_BUTTON`          | (none)      | The controller button (`a`, `b`, `x` or `y`) that shuts the node down when pressed. May be repeated for several buttons; the environment variable takes a comma-separated list. |
+| `--quit-button`          | `QUIT_BUTTON`          | (none)      | The controller button (`a`, `b`, `x` or `y`) that shuts the node down when pressed. Giving this option also publishes `"quit"` on the `command` output whenever the node exits, even by an error rather than the button. May be repeated for several buttons; the environment variable takes a comma-separated list. |
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
 | `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
 | `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |

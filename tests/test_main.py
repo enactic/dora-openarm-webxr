@@ -137,7 +137,8 @@ def test_frame_without_sequence_processed(node):
 
 def test_quit_button(node, monkeypatch):
     # A configured quit button shuts the node down straight from the
-    # controller, without needing a downstream quitter node.
+    # controller. The quit command is not sent here: it goes out when
+    # the dora loop ends, so an error exit says it too.
     monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a", "b"))
     monkeypatch.setattr(main, "_running", True)
     state = main._ConnectionState()
@@ -147,8 +148,39 @@ def test_quit_button(node, monkeypatch):
     assert main._running
     main._process_frame({"type": "frame", "sequence": 2, "button_b": True}, state)
     assert not main._running
+    assert "command" not in node.ids()
     # The press still reaches the dataflow like any other button.
     assert node.ids().count("button_b") == 2
+
+
+def test_quit_command_sent_on_exit(node, monkeypatch):
+    # With --quit-button on, every exit publishes "quit" on the command
+    # output, so a dora-openarm-quitter node ends the rest of the
+    # dataflow even when this node died of an error.
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a",))
+    main._send_quit_command()
+    assert node.value("command")[0].as_py() == "quit"
+
+
+def test_quit_command_needs_quit_button(node, monkeypatch):
+    # A dataflow that never asked for --quit-button keeps its own idea
+    # of when to stop.
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ())
+    main._send_quit_command()
+    assert "command" not in node.ids()
+
+
+def test_quit_command_send_failure_swallowed(node, monkeypatch, capsys):
+    # A dataflow already torn down can refuse the send; that must not
+    # replace whatever error is already on its way out of main().
+    class _RefusingNode:
+        def send_output(self, output_id, value, metadata=None):
+            raise RuntimeError("event stream closed")
+
+    monkeypatch.setattr(main, "node", _RefusingNode())
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a",))
+    main._send_quit_command()
+    assert "cannot send quit command" in capsys.readouterr().out
 
 
 def test_session_start_resets_state(node, monkeypatch):
