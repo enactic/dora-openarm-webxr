@@ -445,7 +445,6 @@ def _map_trigger_to_gripper(trigger: float, side: str) -> float:
     return float(np.deg2rad(open_deg + trigger * (closed_deg - open_deg)))
 
 
-
 def _adjust_pose(pose, reference, smoother, smoother_time):
     """Convert WebXR style pose to our style.
 
