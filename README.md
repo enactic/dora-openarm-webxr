@@ -76,6 +76,37 @@ warning. You can continue to the page from its "Advanced" options.
 Press the "Start" button on the page to start teleoperation with your
 VR device.
 
+## Pose timing
+
+From 0.6.0, hand pose output requires a `tick` input. Each received XR
+frame replaces the raw target cache; each tick converts, filters and
+publishes the latest targets. There is no trajectory interpolation or
+extra worker. The examples use `dora/timer/millis/2` (500 Hz) and matching
+IK `--tick-hz 500` with kinematics >=0.2.2 / openarm-control >=0.4.0.
+
+Filtering matches dora-openarm-vr: One Euro parameters are
+`min_cutoff=2.0`, `beta=0.04`, `d_cutoff=1.5`, using actual monotonic time
+between updates. Linear and angular speeds are capped at 1 m/s and
+6 rad/s by default; set either limit to 0 to disable it.
+
+A missing hand pose or trigger pauses that hand; a missing head reference
+or active calibration pauses both. Pausing preserves the last filtered
+pose, clears its velocity estimate and advances its clock on every tick,
+so recovery does not accumulate a large time step. New sessions instead
+reset the filters: their first valid target passes through unchanged.
+
+Only the most recently started peer supplies targets. Closing its data
+channel, or a failed/closed peer connection, clears the cache; old peers'
+frames and close events cannot affect the active session. Silent packet
+loss is different: by default ticks keep using the cached target, like
+UDP VR. Optional `--pose-timeout 0.2` pauses poses after 0.2 seconds without
+a new accepted frame. It defaults to 0 (disabled), uses receive time, and
+does not send a robot stop command.
+
+Hand pose metadata timestamps mark tick publication. `vr_receive_times`,
+buttons, triggers, joysticks, head-reference output and calibration samples
+remain receive-driven; video handling is unchanged.
+
 ## WebRTC-only mode
 
 By default this node serves the page itself, which is why it needs a
@@ -252,29 +283,27 @@ and Chrome to debug this node without a VR device.
 
 ## Inputs
 
-This dora-rs node accepts the following data. Both are optional and
-only needed to show a head camera in the VR device.
+The pose tick is required. Camera inputs are optional.
 
 | Input                | Type      | Description                                                              |
 |----------------------|-----------|--------------------------------------------------------------------------|
+| `tick`               | any       | Advances hand pose filtering and output, e.g. `dora/timer/millis/2` for 500 Hz. |
 | `camera_head_right`  | `uint8[]` | A JPEG image of the robot's head camera.                                 |
 | `camera_head_left`   | `uint8[]` | A JPEG image for the left eye. Only used by the stereo view.             |
 
 ## Outputs
 
-This dora-rs node outputs the following data. Pose, trigger, grip and
-joystick outputs are sent on each `frame` message received from the VR
-device. Button outputs are sent only when the corresponding button is
-included in a `frame` message. `pose_reference` is sent whenever the
-headset is tracked, even while the controllers are off, and the
-controller poses are sent only when it is.
+Hand poses are sent on each tick with a valid cached target. Trigger,
+grip and joystick outputs are sent on received frames; buttons only when
+included in a frame. `pose_reference` is sent on received frames whenever
+the headset is tracked, even while the controllers are off.
 
 | Output             | Type              | Description                                                                                                                                    |
 |--------------------|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `status`           | `string`          | `"ready"` when a WebXR session is started.                                                                                                      |
 | `vr_receive_times` | `int64`           | The timestamp in nanoseconds when a frame is received from the VR device.                                                                       |
-| `pose_right`       | `float32[7]`      | The pose of the right controller as `[x, y, z, qw, qx, qy, qz]`, expressed in the scene's `arm_origin` site frame. Position is in meters and orientation is a quaternion. |
-| `pose_left`        | `float32[7]`      | The pose of the left controller. The format is the same as `pose_right`.                                                                        |
+| `pose_right`       | struct: `pose: float32[8]` | `[x, y, z, qw, qx, qy, qz, gripper]` in the scene's `arm_origin` site frame. Position is in meters; gripper is the mapped trigger angle. |
+| `pose_left`        | struct: `pose: float32[8]` | The left controller, in the same format as `pose_right`. |
 | `pose_reference`   | `float32[7]`      | The pose of the headset, in the WebXR reference space (x right, y up, -z forward). The hand poses are made relative to this pose, so it is unrotated and unsmoothed and left in the WebXR frame for consumers that drive something from head motion such as a neck. |
 | `trigger_right`    | `float32`         | The value of the right trigger from `0.0` (released) to `1.0` (fully pressed).                                                                  |
 | `trigger_left`     | `float32`         | The value of the left trigger from `0.0` (released) to `1.0` (fully pressed).                                                                   |
@@ -318,6 +347,9 @@ useful in a dora-rs dataflow YAML.
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
 | `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
 | `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |
+| `--max-linear-speed`    | `MAX_LINEAR_SPEED`    | `1.0`       | Maximum filtered hand translation speed in m/s; 0 disables the limit. |
+| `--max-angular-speed`   | `MAX_ANGULAR_SPEED`   | `6.0`       | Maximum filtered hand rotation speed in rad/s; 0 disables the limit. |
+| `--pose-timeout`        | `POSE_TIMEOUT`        | `0`         | Seconds without a new accepted XR frame before pausing hand poses; 0 disables the timeout. |
 
 ## License
 

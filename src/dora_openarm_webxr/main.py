@@ -17,10 +17,10 @@
 This dora-rs node talks WebRTC with a VR device such as Meta Quest 3 or
 PICO 4. Controller poses arrive on an unreliable data channel and head
 camera frames leave on video tracks; :mod:`.webrtc` owns that half.
-For each frame received from the device, it converts the controller
-pose from WebXR coordinates into the OpenArm workspace, smooths it with
-a One Euro filter, and publishes the pose, trigger, joystick and button
-state as dora-rs outputs.
+Each received frame updates the latest controller targets. Dora ticks
+drive coordinate conversion, One Euro filtering, rate limiting and hand
+pose output. Trigger, joystick, button and head-reference outputs remain
+driven by received frames, independently of the pose tick.
 
 The published poses are expressed in the scene's ``arm_origin`` site
 frame (chest-level origin between the arms), not in world coordinates.
@@ -68,6 +68,9 @@ server = None
 webrtc_server = None
 _state = None
 _running = True
+_MAX_LINEAR_SPEED = 1.0
+_MAX_ANGULAR_SPEED = 6.0
+_POSE_TIMEOUT = 0.0
 
 
 # Relative pose to robot workspace mapping.
@@ -558,15 +561,23 @@ class _ConnectionState:
     def __init__(self):
         """Start with fresh smoothers and no frame seen yet."""
         self.smoothers = {
-            "right": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
-            "left": OneEuroPoseSmoother(min_cutoff=2.0, beta=0.04, d_cutoff=1.5),
+            side: OneEuroPoseSmoother(
+                min_cutoff=2.0,
+                beta=0.04,
+                d_cutoff=1.5,
+                max_linear_speed=_MAX_LINEAR_SPEED,
+                max_angular_speed=_MAX_ANGULAR_SPEED,
+            )
+            for side in ("right", "left")
         }
         self.pivot_calibration = _PivotCalibration(enabled=_CALIBRATION_ENABLED)
         self.last_sequence = -1
+        self.latest_frame = None
+        self.received_at = 0.0
 
 
 def _process_frame(response, state):
-    """Publish dora outputs for one frame message.
+    """Cache raw targets and publish receive-driven outputs for one frame.
 
     Frames ride an unordered channel that never retransmits, so one can
     arrive after a newer one has already been published. Publishing it
@@ -580,7 +591,8 @@ def _process_frame(response, state):
             return
         state.last_sequence = sequence
     metadata = {"timestamp": time.time_ns()}
-    smoother_time = time.perf_counter()
+    state.latest_frame = response
+    state.received_at = time.perf_counter()
     # An absent button is a released one, so a controller that falls
     # asleep mid-run cannot leave the hands stopped. The client only
     # sends the buttons on the profiles it knows, and on those it sends
@@ -615,30 +627,7 @@ def _process_frame(response, state):
             if pressed and button in _QUIT_BUTTONS:
                 _stop()
     for side in ["right", "left"]:
-        pose = f"pose_{side}"
         trigger = f"trigger_{side}"
-        # The hands stop while a run is under way. Turning the head moves
-        # the target by the very arc being measured, and the operator is
-        # shaking their head, not reaching. Without --calibration no run
-        # is ever under way.
-        if (
-            pose in response
-            and trigger in response
-            and reference
-            and not state.pivot_calibration.collecting
-        ):
-            smoother = state.smoothers[side]
-            adjusted_pose = _adjust_pose(
-                response[pose], reference, smoother, smoother_time
-            )
-            gripper_angle = _map_trigger_to_gripper(response[trigger], side)
-            gripper_array = np.array([gripper_angle], dtype=np.float32)
-            pose_with_gripper = np.concatenate([adjusted_pose, gripper_array])
-            node.send_output(
-                pose,
-                _build_pose_output(pose_with_gripper),
-                metadata,
-            )
         if trigger in response:
             node.send_output(
                 trigger,
@@ -676,6 +665,34 @@ def _process_frame(response, state):
             )
 
 
+def _publish_poses(state):
+    """Filter the latest raw targets and publish hand poses once per tick."""
+    now = time.perf_counter()
+    if _POSE_TIMEOUT > 0.0 and now - state.received_at > _POSE_TIMEOUT:
+        state.latest_frame = None
+    response = state.latest_frame or {}
+    reference = response.get("pose_reference")
+    metadata = {"timestamp": time.time_ns()}
+    for side, smoother in state.smoothers.items():
+        pose = response.get(f"pose_{side}")
+        trigger = response.get(f"trigger_{side}")
+        if (
+            not pose
+            or not reference
+            or trigger is None
+            or state.pivot_calibration.collecting
+        ):
+            smoother.suspend(now)
+            continue
+        adjusted_pose = _adjust_pose(pose, reference, smoother, now)
+        gripper_angle = _map_trigger_to_gripper(trigger, side)
+        node.send_output(
+            f"pose_{side}",
+            _build_pose_output(np.concatenate([adjusted_pose, [gripper_angle]])),
+            metadata,
+        )
+
+
 def _on_frame(payload):
     """Hand one frame message from the transport to the pose pipeline."""
     _process_frame(payload, _state)
@@ -686,6 +703,14 @@ def _on_session_start():
     global _state
     _state = _ConnectionState()
     node.send_output("status", pa.array(["ready"]), {"timestamp": time.time_ns()})
+
+
+def _on_session_end():
+    """Invalidate the active session's cached targets."""
+    _state.latest_frame = None
+    now = time.perf_counter()
+    for smoother in _state.smoothers.values():
+        smoother.suspend(now)
 
 
 @app.post("/offer")
@@ -765,15 +790,21 @@ async def _main_dora():
     try:
         while _serving():
             if node.is_empty():
-                await asyncio.sleep(0.001)
-                continue
-            event = node.next()
+                # Keep WebRTC responsive; the timeout lets shutdown flags be checked.
+                event = await asyncio.to_thread(node.next, 0.1)
+            else:
+                event = node.next()
             # None is the event stream closing under us, which is how a
             # dataflow being torn down can look from here: treat it like
             # STOP rather than crashing out of the loop with _stop() unrun.
             if event is None or event["type"] == "STOP":
                 break
-            video.handle_event(event)
+            if event["type"] == "INPUT" and event["id"] == "tick":
+                _publish_poses(_state)
+            else:
+                video.handle_event(event)
+            # Service WebRTC even when the Dora input queue stays busy.
+            await asyncio.sleep(0)
     finally:
         _send_quit_command()
         _stop()
@@ -838,6 +869,7 @@ async def _main_async():
     webrtc_server = webrtc.WebRTCServer(
         on_frame=_on_frame,
         on_session_start=_on_session_start,
+        on_session_end=_on_session_end,
         calibration_enabled=_CALIBRATION_ENABLED,
         ice_servers=_ICE_SERVERS,
     )
@@ -972,10 +1004,36 @@ def main():
             "back from (default: neck_pivot.yaml)"
         ),
     )
+    parser.add_argument(
+        "--max-linear-speed",
+        type=float,
+        default=float(os.getenv("MAX_LINEAR_SPEED", "1.0")),
+        help="Maximum hand pose translation speed in m/s; 0 disables it (default: 1.0).",
+    )
+    parser.add_argument(
+        "--max-angular-speed",
+        type=float,
+        default=float(os.getenv("MAX_ANGULAR_SPEED", "6.0")),
+        help="Maximum hand pose rotation speed in rad/s; 0 disables it (default: 6.0).",
+    )
+    parser.add_argument(
+        "--pose-timeout",
+        type=float,
+        default=float(os.getenv("POSE_TIMEOUT", "0")),
+        help="Pause hand pose output after this many seconds without a new frame; 0 disables it (default).",
+    )
     video.add_arguments(parser)
 
     global args
     args = parser.parse_args()
+    for name in ("max_linear_speed", "max_angular_speed", "pose_timeout"):
+        value = getattr(args, name)
+        if not np.isfinite(value) or value < 0.0:
+            parser.error(f"--{name.replace('_', '-')} must be finite and non-negative")
+    global _MAX_LINEAR_SPEED, _MAX_ANGULAR_SPEED, _POSE_TIMEOUT
+    _MAX_LINEAR_SPEED = args.max_linear_speed
+    _MAX_ANGULAR_SPEED = args.max_angular_speed
+    _POSE_TIMEOUT = args.pose_timeout
 
     # argparse cannot express "required unless another option is given",
     # and WebXR only runs on an HTTPS page, so the certificate is required

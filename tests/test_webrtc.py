@@ -124,9 +124,11 @@ def test_answer_session():
 async def _run_answer_session():
     frames = []
     sessions = []
+    ended = []
     server = webrtc.WebRTCServer(
         on_frame=frames.append,
         on_session_start=lambda: sessions.append(True),
+        on_session_end=lambda: ended.append(True),
         calibration_enabled=True,
     )
     received: dict = {}
@@ -164,6 +166,9 @@ async def _run_answer_session():
             await asyncio.sleep(0.05)
         assert received["frame"].width == 64
         assert received["frame"].height == 48
+        await pc.close()
+        await _wait_for(lambda: ended)
+        assert ended == [True]
     finally:
         await pc.close()
         await server.close()
@@ -295,6 +300,8 @@ async def _run_oneshot(server, frames):
         await _relay(pc, server, 10.0)
 
         await _wait_for(lambda: "configuration" in received)
+        received["control"].send(json.dumps({"type": "session-start"}))
+        await _wait_for(lambda: server._active_peer is not None)
         await _wait_for(lambda: xr.readyState == "open")
         xr.send(json.dumps({"type": "frame", "sequence": 1}))
         await _wait_for(lambda: frames)
@@ -312,6 +319,33 @@ def test_oneshot_disconnect():
         on_session_start=lambda: None,
     )
     asyncio.run(_run_oneshot_disconnect(server))
+
+
+def test_only_active_session_can_publish_or_end():
+    frames, started, ended = [], [], []
+    server = webrtc.WebRTCServer(
+        on_frame=frames.append,
+        on_session_start=lambda: started.append(True),
+        on_session_end=lambda: ended.append(True),
+    )
+    old, current = object(), object()
+    frame = json.dumps({"type": "frame", "sequence": 1})
+    start = json.dumps({"type": "session-start"})
+    server._handle_frame_message(frame, old)
+    assert not frames
+    server._handle_control_message(start, old)
+    server._handle_frame_message(frame, old)
+    server._handle_control_message(start, current)
+    server._handle_frame_message(frame, old)
+    server._end_session(old)
+    assert not ended
+    server._handle_frame_message(frame, current)
+    assert len(frames) == len(started) == 2
+    server._end_session(current)
+    server._end_session(current)
+    server._handle_frame_message(frame, current)
+    assert ended == [True]
+    assert len(frames) == 2
 
 
 async def _run_oneshot_disconnect(server):

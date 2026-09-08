@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import pytest
 
 from dora_openarm_webxr import main
@@ -79,7 +80,7 @@ def test_frame_outputs(node):
     ids = node.ids()
     assert "vr_receive_times" in ids
     assert "pose_reference" in ids
-    assert "pose_right" in ids
+    assert "pose_right" not in ids
     assert "trigger_right" in ids
     assert "grip_left" in ids
     assert "button_a" in ids
@@ -90,6 +91,11 @@ def test_frame_outputs(node):
     # to keep the convention the downstream nodes were written against.
     assert node.value("joystick_x_right")[0].as_py() == 0.5
     assert node.value("joystick_y_right")[0].as_py() == -0.25
+    main._publish_poses(state)
+    main._publish_poses(state)
+    assert node.ids().count("pose_right") == 2
+    assert node.ids().count("vr_receive_times") == 1
+    assert node.ids().count("button_a") == 1
 
 
 def test_pose_needs_reference(node):
@@ -105,6 +111,7 @@ def test_pose_needs_reference(node):
         },
         state,
     )
+    main._publish_poses(state)
     ids = node.ids()
     assert "pose_right" not in ids
     assert "trigger_right" in ids
@@ -192,6 +199,95 @@ def test_session_start_resets_state(node, monkeypatch):
     main._on_session_start()
     assert main._state is not old_state
     assert main._state.last_sequence == -1
+    assert main._state.latest_frame is None
     assert node.ids() == ["vr_receive_times", "button_a", "status"]
     main._process_frame({"type": "frame", "sequence": 1, "button_b": True}, main._state)
     assert "button_b" in node.ids()
+
+
+def _hand_frame(sequence=1):
+    return {
+        "sequence": sequence,
+        "pose_reference": dict(IDENTITY_POSE),
+        "pose_right": dict(IDENTITY_POSE),
+        "pose_left": dict(IDENTITY_POSE),
+        "trigger_right": 0.5,
+        "trigger_left": 0.5,
+    }
+
+
+@pytest.mark.parametrize("missing", ["pose_right", "trigger_right", "pose_reference"])
+def test_invalid_target_suspends_and_recovers(node, monkeypatch, missing):
+    clock = [1.0]
+    monkeypatch.setattr(main.time, "perf_counter", lambda: clock[0])
+    state = main._ConnectionState()
+    main._publish_poses(state)
+    assert not node.outputs
+    frame = _hand_frame()
+    main._process_frame(frame, state)
+    main._publish_poses(state)
+    smoother = state.smoothers["right"]
+    previous = smoother.p_prev.copy()
+    invalid = _hand_frame(2)
+    del invalid[missing]
+    clock[0] = 10.0
+    main._process_frame(invalid, state)
+    main._publish_poses(state)
+    assert node.ids().count("pose_right") == 1
+    assert node.ids().count("pose_left") == (1 if missing == "pose_reference" else 2)
+    assert smoother.t_prev == 10.0
+    np.testing.assert_array_equal(smoother.dp_prev, np.zeros(3))
+    np.testing.assert_array_equal(smoother.p_prev, previous)
+
+    frame["sequence"] = 3
+    frame["pose_right"]["x"] = 1.0
+    clock[0] += 0.002
+    main._process_frame(frame, state)
+    main._publish_poses(state)
+    assert 0 < np.linalg.norm(smoother.p_prev - previous) <= 0.002001
+    previous = smoother.p_prev.copy()
+    clock[0] += 0.002
+    main._publish_poses(state)
+    assert 0 < np.linalg.norm(smoother.p_prev - previous) <= 0.002001
+    assert node.ids().count("vr_receive_times") == 3
+
+
+@pytest.mark.parametrize("timeout", [0.0, 0.05])
+def test_pose_timeout_uses_accepted_frame_receive_time(node, monkeypatch, timeout):
+    clock = [1.0]
+    monkeypatch.setattr(main.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(main, "_POSE_TIMEOUT", timeout)
+    state = main._ConnectionState()
+    main._process_frame(_hand_frame(), state)
+    main._publish_poses(state)
+    clock[0] = 2.0
+    main._process_frame(_hand_frame(), state)  # Duplicate sequence is not a refresh.
+    main._publish_poses(state)
+    assert state.received_at == 1.0
+    assert node.ids().count("pose_right") == (1 if timeout else 2)
+    assert (state.latest_frame is None) == bool(timeout)
+    assert state.smoothers["right"].t_prev == 2.0
+
+
+def test_calibration_samples_are_receive_driven(node, monkeypatch):
+    monkeypatch.setattr(main, "_CALIBRATION_ENABLED", True)
+    state = main._ConnectionState()
+    frame = _hand_frame()
+    frame["button_y"] = True
+    main._process_frame(frame, state)
+    for _ in range(5):
+        main._publish_poses(state)
+    assert "pose_right" not in node.ids()
+    assert len(state.pivot_calibration._samples) == 1
+    assert node.ids().count("trigger_right") == 1
+
+
+def test_session_end_clears_cached_targets(node, monkeypatch):
+    state = main._ConnectionState()
+    monkeypatch.setattr(main, "_state", state)
+    main._process_frame(_hand_frame(), state)
+    main._publish_poses(state)
+    main._on_session_end()
+    main._publish_poses(state)
+    assert state.latest_frame is None
+    assert node.ids().count("pose_right") == 1

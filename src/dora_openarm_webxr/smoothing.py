@@ -36,27 +36,43 @@ def _slerp_quat(q1: np.ndarray, q2: np.ndarray, alpha: float) -> np.ndarray:
     return s0 * q1 + s1 * q2
 
 
+def _limit_scale(step: float, maximum: float) -> float:
+    return min(1.0, maximum / step) if maximum > 0.0 and step > 0.0 else 1.0
+
+
 class OneEuroPoseSmoother:
     """One Euro Filter applied to position (adaptive cutoff) and rotation (SLERP)."""
 
     def __init__(
-        self, min_cutoff: float = 10.0, beta: float = 0.8, d_cutoff: float = 1.0
+        self,
+        min_cutoff: float = 10.0,
+        beta: float = 0.8,
+        d_cutoff: float = 1.0,
+        max_linear_speed: float = 0.0,
+        max_angular_speed: float = 0.0,
     ):
         """Initialize."""
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
+        self.max_linear_speed = max_linear_speed
+        self.max_angular_speed = max_angular_speed
         self.p_prev = None
         self.q_prev = None
         self.dp_prev = np.zeros(3)
         self.t_prev = None
 
     def reset(self) -> None:
-        """Clear state so next sample is treated as a fresh start (call on INVALID→valid transition)."""
+        """Clear all filter state."""
         self.p_prev = None
         self.q_prev = None
         self.dp_prev = np.zeros(3)
         self.t_prev = None
+
+    def suspend(self, t: float) -> None:
+        """Pause updates while preserving the last filtered pose."""
+        self.dp_prev = np.zeros(3)
+        self.t_prev = t
 
     def smooth(self, t: float, target_pose: np.ndarray | None) -> np.ndarray | None:
         """Smooth the target pose."""
@@ -88,8 +104,21 @@ class OneEuroPoseSmoother:
         cutoff_p = self.min_cutoff + self.beta * speed
 
         alpha_p = get_alpha(dt, cutoff_p)
-        p_hat = self.p_prev + alpha_p * (t_p - self.p_prev)
-        q_hat = _slerp_quat(self.q_prev, t_q, alpha_p)
+        p_error = t_p - self.p_prev
+        position_step = alpha_p * p_error
+        position_step *= _limit_scale(
+            np.linalg.norm(position_step), self.max_linear_speed * dt
+        )
+        p_hat = self.p_prev + position_step
+
+        q_error_angle = 2.0 * np.arccos(
+            np.clip(abs(np.dot(self.q_prev, t_q)), 0.0, 1.0)
+        )
+        rotation_alpha = alpha_p * _limit_scale(
+            alpha_p * q_error_angle,
+            self.max_angular_speed * dt,
+        )
+        q_hat = _slerp_quat(self.q_prev, t_q, rotation_alpha)
 
         self.p_prev = p_hat
         self.q_prev = q_hat
