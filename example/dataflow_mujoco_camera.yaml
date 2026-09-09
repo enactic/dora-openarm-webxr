@@ -41,6 +41,7 @@ nodes:
       # Fixes one image in the room.
       VIEW_CONFIGURATION_FILE: "view_camera.yaml"
     inputs:
+      tick: dora/timer/millis/2
       # Keeps the view on the newest frame. Without it, frames the VR
       # device cannot keep up with queue and latency grows.
       camera_head_right:
@@ -112,9 +113,12 @@ nodes:
       - pose_reference
 
   - id: ik
-    build: pip install dora-openarm-kinematics
+    build: pip install "dora-openarm-kinematics>=0.2.3"
     path: dora-openarm-ik
-    args: "--mode bimanual --max-iters 10 --dt 0.1 --damping 0.1 --posture-cost 0.01 --lm-damping 0.01"
+    args: >-
+      --mode bimanual --tick-hz 500
+      --max-iters 5 --damping 0.1
+      --posture-cost 0 --lm-damping 0.01 --limit-velocity
     inputs:
       target_right: quittable-webxr/pose_right
       target_left: quittable-webxr/pose_left
