@@ -45,10 +45,18 @@ panel:
   width: 1.5
 
 pose:
+  # Controller pose mapping, independent of panel.lock:
+  # neck (default): subtract the neck pivot, keeping WebXR local axes.
+  # relative: transform position and orientation into the current headset
+  # frame. The reference follows the head; it is not latched on clutch.
+  # mode: relative
+
   # Neutral hand position relative to the arm_origin site (chest
   # level), in meters.
   frame_offset: [-0.1, 0.0, 0.23]
 
+  # Neck mode only; relative ignores this and --neck-pivot-file.
+  # --calibration also requires neck mode.
   # Eyes to the neck's rotation axis, in the headset's own frame
   # (-z forward, +y up), in meters. The hand positions are made relative
   # to this pivot rather than to the headset, so a head turn does not
