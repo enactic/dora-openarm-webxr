@@ -196,11 +196,28 @@ The example files pair them the two useful ways:
   works its camera and alignment parameters out from a ZED camera's
   factory calibration.
 
+Both files accept `pose.mode`, read once at startup:
+
+- `neck` (default): positions are relative to the estimated neck pivot;
+  position axes and controller orientation stay aligned with WebXR local space.
+- `relative`: apply the inverse of the current headset pose to both controller
+  position and orientation. The reference updates each frame; it is not latched.
+  Neck offsets and the neck-pivot file are ignored, and `--calibration` is rejected.
+
+```yaml
+pose:
+  mode: neck # neck or relative
+```
+
+Both modes share the robot-frame mapping, end-effector rotation correction,
+filtering, and speed limits. `pose_reference` remains the original headset pose.
+Restart the node after changing the mode.
+
 Both files also take `pose.frame_offset`: the neutral hand position
 relative to the `arm_origin` site in meters, overriding the built-in
 default of `[-0.085, 0, -0.14]`.
 
-They also take `pose.neck_pivot_offset`: the operator's eyes to the
+In `neck` mode, they also take `pose.neck_pivot_offset`: the operator's eyes to the
 neck's rotation axis, in the headset's own frame, overriding the
 built-in default of `[0.0, -0.075, 0.080]`. Hand positions are made
 relative to that pivot rather than to the headset itself, so turning the
