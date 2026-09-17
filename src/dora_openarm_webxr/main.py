@@ -24,9 +24,10 @@ driven by received frames, independently of the pose tick.
 
 The published poses are expressed in the scene's ``arm_origin`` site
 frame (chest-level origin between the arms), not in world coordinates.
-Downstream IK interprets targets in the same frame. The hand position
-is relative to the headset but keeps the world axes, so looking around
-does not drag the target with the head.
+Downstream IK interprets targets in the same frame. By default, hand positions
+are relative to the neck pivot and keep the local-space axes. With
+``pose.mode: relative``, both position and orientation are relative to the
+current headset pose instead.
 
 The headset pose that the hands are made relative to is published as
 is on ``pose_reference``, in the WebXR reference space, for consumers
@@ -71,6 +72,7 @@ _running = True
 _MAX_LINEAR_SPEED = 1.0
 _MAX_ANGULAR_SPEED = 6.0
 _POSE_TIMEOUT = 0.0
+_POSE_MODE = "neck"
 
 
 # Relative pose to robot workspace mapping.
@@ -452,18 +454,10 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     """Convert WebXR style pose to our style.
 
     ``pose`` and ``reference`` (the viewer pose) are in the same
-    world-fixed reference space. Only the position is made relative to
-    the viewer, by subtracting it in the world axes. The viewer
-    rotation is never applied: turning the head must not move the
-    target. The controller orientation is passed through as its world
-    orientation for the same reason.
-
-    What is subtracted is the neck pivot rather than the headset itself,
-    since the headset orbits that pivot as the head turns and would
-    otherwise carry the arc into the target. The viewer rotation is used
-    to place the pivot, which is not the same as applying it to the
-    hand: it only says which way the operator is facing, so the point
-    behind their face can be found.
+    world-fixed local reference space. In ``neck`` mode, subtract the estimated
+    neck pivot while keeping local-space axes and controller orientation.
+    In ``relative`` mode, apply the inverse viewer transform to both position
+    and orientation, without neck compensation.
 
     WebXR style:
       * right-handed
@@ -484,14 +478,19 @@ def _adjust_pose(pose, reference, smoother, smoother_time):
     reference_rotation = Rotation.from_quat(
         [reference["qx"], reference["qy"], reference["qz"], reference["qw"]]
     )
-    # Turned into world axes, so "behind the face" follows where the head faces.
-    pivot = np.array(
+    reference_position = np.array(
         [reference["x"], reference["y"], reference["z"]], dtype=np.float32
-    ) + reference_rotation.apply(_NECK_PIVOT_OFFSET)
-    position = (
-        np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32) - pivot
-    ).astype(np.float32)
+    )
+    position = np.array([pose["x"], pose["y"], pose["z"]], dtype=np.float32)
     rotation = Rotation.from_quat([pose["qx"], pose["qy"], pose["qz"], pose["qw"]])
+
+    if _POSE_MODE == "relative":
+        reference_inverse = reference_rotation.inv()
+        position = reference_inverse.apply(position - reference_position)
+        rotation = reference_inverse * rotation
+    else:
+        pivot = reference_position + reference_rotation.apply(_NECK_PIVOT_OFFSET)
+        position = (position - pivot).astype(np.float32)
 
     position = _ROBOT_ROTATION.apply(position) + _FRAME_OFFSET_CELL
     rotation = _ROBOT_ROTATION * rotation * _CONTROLLER_TO_EE
@@ -1087,13 +1086,20 @@ def main():
 
     # Read once at startup; restart the dataflow to apply a change.
     pose_configuration = video.view_configuration().get("pose") or {}
+    global _POSE_MODE
+    _POSE_MODE = pose_configuration.get("mode", "neck")
+    if _POSE_MODE not in ("neck", "relative"):
+        parser.error("pose.mode must be 'neck' or 'relative'")
+    if _POSE_MODE == "relative" and args.calibration:
+        parser.error("--calibration requires pose.mode=neck")
 
     frame_offset = pose_configuration.get("frame_offset")
     if frame_offset is not None:
         global _FRAME_OFFSET_CELL
         _FRAME_OFFSET_CELL = np.array(frame_offset, dtype=np.float32).reshape(3)
 
-    _configure_neck_pivot(pose_configuration, args.neck_pivot_file)
+    if _POSE_MODE == "neck":
+        _configure_neck_pivot(pose_configuration, args.neck_pivot_file)
 
     global node
     node = dora.Node()

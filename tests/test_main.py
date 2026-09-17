@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -291,3 +293,104 @@ def test_session_end_clears_cached_targets(node, monkeypatch):
     main._publish_poses(state)
     assert state.latest_frame is None
     assert node.ids().count("pose_right") == 1
+
+
+def _pose(position, rotation):
+    return dict(
+        zip(
+            ("x", "y", "z", "qx", "qy", "qz", "qw"),
+            [*position, *rotation.as_quat()],
+            strict=True,
+        )
+    )
+
+
+def _adjust(pose, reference):
+    return np.asarray(
+        main._adjust_pose(pose, reference, main.OneEuroPoseSmoother(), 1.0)
+    )
+
+
+def test_neck_mode_keeps_target_fixed_when_head_rotates_about_pivot(monkeypatch):
+    monkeypatch.setattr(main, "_POSE_MODE", "neck")
+    pivot = np.array([0.2, 1.4, -0.1])
+    hand_position = np.array([0.4, 1.2, -0.5])
+    hand_rotation = main.Rotation.from_euler("xyz", [15, -20, 35], degrees=True)
+    expected_position = (
+        main._ROBOT_ROTATION.apply(hand_position - pivot) + main._FRAME_OFFSET_CELL
+    )
+    expected_rotation = main._ROBOT_ROTATION * hand_rotation * main._CONTROLLER_TO_EE
+    for angles in ([0, 0, 0], [25, 60, -15]):
+        head_rotation = main.Rotation.from_euler("xyz", angles, degrees=True)
+        head_position = pivot - head_rotation.apply(main._NECK_PIVOT_OFFSET)
+        result = _adjust(
+            _pose(hand_position, hand_rotation), _pose(head_position, head_rotation)
+        )
+        np.testing.assert_allclose(result[:3], expected_position, atol=1e-6)
+        assert abs(result[3:] @ expected_rotation.as_quat()[[3, 0, 1, 2]]) == (
+            pytest.approx(1.0, abs=1e-6)
+        )
+
+
+def test_relative_mode_follows_reference_frame_and_ignores_neck(monkeypatch):
+    monkeypatch.setattr(main, "_POSE_MODE", "relative")
+    monkeypatch.setattr(main, "_NECK_PIVOT_OFFSET", np.array([10.0, 20.0, 30.0]))
+    relative_position = np.array([0.2, -0.3, -0.4])
+    relative_rotation = main.Rotation.from_euler("xyz", [20, 40, -10], degrees=True)
+    expected_position = (
+        main._ROBOT_ROTATION.apply(relative_position) + main._FRAME_OFFSET_CELL
+    )
+    expected_rotation = (
+        main._ROBOT_ROTATION * relative_rotation * main._CONTROLLER_TO_EE
+    )
+    for angles, head_position in (([0, 0, 0], [0, 0, 0]), ([25, 60, -15], [1, 2, 3])):
+        head_rotation = main.Rotation.from_euler("xyz", angles, degrees=True)
+        hand_position = head_rotation.apply(relative_position) + head_position
+        result = _adjust(
+            _pose(hand_position, head_rotation * relative_rotation),
+            _pose(head_position, head_rotation),
+        )
+        np.testing.assert_allclose(result[:3], expected_position, atol=1e-6)
+        assert abs(result[3:] @ expected_rotation.as_quat()[[3, 0, 1, 2]]) == (
+            pytest.approx(1.0, abs=1e-6)
+        )
+
+
+@pytest.mark.parametrize(
+    ("mode", "calibrate", "error"),
+    [
+        (None, False, None),
+        ("relative", False, None),
+        ("relative", True, "--calibration requires pose.mode=neck"),
+        ("invalid", False, "pose.mode must be 'neck' or 'relative'"),
+    ],
+)
+def test_pose_mode_configuration(node, monkeypatch, capsys, mode, calibrate, error):
+    argv = ["webxr", "--offer", "test", "--answer-port", "1234"]
+    if calibrate:
+        argv.append("--calibration")
+    monkeypatch.setattr(sys, "argv", argv)
+    for name in ("args", "_POSE_MODE", "_CALIBRATION_ENABLED", "_NECK_PIVOT_FILE"):
+        monkeypatch.setattr(main, name, getattr(main, name))
+    monkeypatch.setattr(main.video, "configure", lambda args: None)
+    pose = {} if mode is None else {"mode": mode}
+    monkeypatch.setattr(main.video, "view_configuration", lambda: {"pose": pose})
+    neck_reads = []
+    monkeypatch.setattr(
+        main, "_configure_neck_pivot", lambda *args: neck_reads.append(args)
+    )
+    monkeypatch.setattr(main.dora, "Node", lambda: node)
+
+    async def run():
+        pass
+
+    monkeypatch.setattr(main, "_main_async", run)
+    if error:
+        with pytest.raises(SystemExit) as exc:
+            main.main()
+        assert exc.value.code == 2
+        assert error in capsys.readouterr().err
+    else:
+        main.main()
+        assert main._POSE_MODE == (mode or "neck")
+        assert len(neck_reads) == (0 if mode == "relative" else 1)
