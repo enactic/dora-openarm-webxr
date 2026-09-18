@@ -22,9 +22,45 @@
     <meta name='apple-mobile-web-app-capable' content='yes'>
 
     <title>OpenArm VR teleoperation</title>
+    <style>
+      #preparing {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        background: #111;
+        color: #fff;
+        font-family: sans-serif;
+        z-index: 1;
+      }
+      #preparing[hidden] {
+        display: none;
+      }
+      #preparing .spinner {
+        width: 48px;
+        height: 48px;
+        border: 4px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      #preparing .label {
+        font-size: 20px;
+      }
+    </style>
   </head>
   <body>
     <script type="module" src="ar.js"></script>
+    <div id="preparing" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="label">preparing</div>
+    </div>
     <button id="start" style="width: 100%; margin-top: 10px;">Start</button>
     <pre id="log"></pre>
   </body>
