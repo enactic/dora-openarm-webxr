@@ -76,6 +76,7 @@ nodes:
     path: dora-openarm-quitter
     inputs:
       command: ui/command
+      tick: dora/timer/millis/2
       pose_right: webxr/pose_right
       trigger_right: webxr/trigger_right
       pose_left: webxr/pose_left
@@ -94,6 +95,7 @@ nodes:
       vr_receive_times: webxr/vr_receive_times
       pose_reference: webxr/pose_reference
     outputs:
+      - tick
       - pose_right
       - trigger_right
       - pose_left
@@ -130,22 +132,23 @@ nodes:
       - status
 
   - id: mujoco
-    build: pip install dora-openarm-mujoco
+    build: pip install "dora-openarm-mujoco>=0.5.0"
     path: dora-openarm-mujoco
     args: "--scene demo --keyframe home --enable-collision --ctrl --viewer --render --debug-frames"
     # env:
     #   DISPLAY: ":1" # needed when running headless with Xvfb
     inputs:
-      position_right: ik/position_right
-      position_left: ik/position_left
+      move_position_right: ik/position_right
+      move_position_left: ik/position_left
+      request_state: quittable-webxr/tick
       pose_right: quittable-webxr/pose_right
       pose_left: quittable-webxr/pose_left
       joystick_y: quittable-webxr/joystick_y_left
       button_x: quittable-webxr/button_x
     outputs:
       - status
-      - arm_right_observation
-      - arm_left_observation
+      - state_right
+      - state_left
       - camera_wrist_right
       - camera_wrist_left
       - camera_head_left
@@ -161,9 +164,9 @@ nodes:
     inputs:
       command: ui/command
       arm_right_action: ik/position_right
-      arm_right_observation: mujoco/arm_right_observation
+      arm_right_observation: mujoco/state_right
       arm_left_action: ik/position_left
-      arm_left_observation: mujoco/arm_left_observation
+      arm_left_observation: mujoco/state_left
       camera_wrist_right: mujoco/camera_wrist_right
       camera_wrist_left: mujoco/camera_wrist_left
       camera_head_left: mujoco/camera_head_left
