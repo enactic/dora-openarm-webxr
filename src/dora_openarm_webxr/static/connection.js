@@ -77,8 +77,10 @@ function gathered(pc) {
 //
 // `signal` takes the offer SDP and resolves with the answer SDP, so a
 // differently hosted page can broker signaling its own way without
-// changing anything else here.
-export async function connect({ signal = postOffer } = {}) {
+// changing anything else here. `onGathered` is called once the browser
+// has finished collecting ICE candidates, which is also when the offer
+// is posted; a page can stop showing that it is still preparing then.
+export async function connect({ signal = postOffer, onGathered } = {}) {
   const pc = new RTCPeerConnection(CONFIGURATION);
   const received = [];
   const handlers = { calibrationResult: null, close: null };
@@ -148,6 +150,9 @@ export async function connect({ signal = postOffer } = {}) {
 
   await pc.setLocalDescription(await pc.createOffer());
   await gathered(pc);
+  if (onGathered) {
+    onGathered();
+  }
   const answer = await signal(pc.localDescription.sdp);
   await pc.setRemoteDescription({ type: "answer", sdp: answer });
 

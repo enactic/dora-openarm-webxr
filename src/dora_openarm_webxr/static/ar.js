@@ -24,6 +24,13 @@ const FALLBACK_CONFIGURATION = {
   panel: { lock: "room", distance: 1.3, width: 1.5 },
 };
 
+function hidePreparing() {
+  const overlay = document.getElementById("preparing");
+  if (overlay) {
+    overlay.hidden = true;
+  }
+}
+
 if (navigator.xr) {
   let connection = null;
   let runningSession = null;
@@ -35,8 +42,10 @@ if (navigator.xr) {
   // so this page needs no route of its own to read it: whoever serves
   // this file, the node still decides how it draws itself. The session
   // can only start once this has resolved, so the view and the panels
-  // are always set by then.
-  const sessionReady = connect().then((opened) => {
+  // are always set by then. The preparing overlay stays up until ICE
+  // gathering has finished, which is the wait before that offer is
+  // posted.
+  const sessionReady = connect({ onGathered: hidePreparing }).then((opened) => {
     connection = opened;
     configuration = opened.configuration || FALLBACK_CONFIGURATION;
 
@@ -336,6 +345,9 @@ if (navigator.xr) {
       });
     })
     .catch((error) => {
+      hidePreparing();
       console.error("cannot connect to the node: " + error);
     });
+} else {
+  hidePreparing();
 }
