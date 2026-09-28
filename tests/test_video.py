@@ -52,6 +52,18 @@ def test_eyes_default_mono():
     assert video.eyes() == ["right"]
 
 
+def test_video_workers_option(monkeypatch):
+    monkeypatch.delenv("VIDEO_WORKERS", raising=False)
+    parser = argparse.ArgumentParser()
+    video.add_arguments(parser)
+    assert parser.parse_args([]).video_workers == 0
+    monkeypatch.setenv("VIDEO_WORKERS", "2")
+    parser = argparse.ArgumentParser()
+    video.add_arguments(parser)
+    assert parser.parse_args([]).video_workers == 2
+    assert parser.parse_args(["--video-workers", "4"]).video_workers == 4
+
+
 def test_eyes_stereo(tmp_path):
     _configure_view(tmp_path, "stereo")
     assert video.eyes() == ["left", "right"]

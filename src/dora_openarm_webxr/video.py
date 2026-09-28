@@ -18,8 +18,8 @@ Takes the JPEG images of the robot's head camera and forwards them to
 the VR device, so the operator can see the robot's workspace while
 teleoperating. The image is drawn on a panel fixed in the room.
 
-Frames leave on their own WebRTC video track, one per eye, so they never
-delay the pose messages that feed IK. This module only keeps the newest
+Frames leave on their own WebRTC video track, one per eye, separately
+from the pose messages that feed IK. This module only keeps the newest
 frame per eye; :mod:`.webrtc` owns the tracks that encode them. How the
 panel is placed is tuned in ``example/view_camera.yaml``.
 """
@@ -64,6 +64,16 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         type=pathlib.Path,
         default=os.getenv("VIEW_CONFIGURATION_FILE"),
         help="YAML file with the head camera panel parameters",
+    )
+    parser.add_argument(
+        "--video-workers",
+        type=int,
+        default=int(os.getenv("VIDEO_WORKERS", "0")),
+        help=(
+            "Worker threads for JPEG decoding and WebRTC encoding; "
+            "0 keeps asyncio's default (default: 0). "
+            "Does not set the encoder's internal thread count"
+        ),
     )
 
 

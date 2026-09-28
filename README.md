@@ -362,11 +362,19 @@ useful in a dora-rs dataflow YAML.
 | `--connect-timeout`      | `CONNECT_TIMEOUT`      | `60`        | Seconds to wait for the browser to connect in WebRTC-only mode.                   |
 | `--quit-button`          | `QUIT_BUTTON`          | (none)      | The controller button (`a`, `b`, `x` or `y`) that shuts the node down when pressed. Giving this option also publishes `"quit"` on the `command` output whenever the node exits, even by an error rather than the button. May be repeated for several buttons; the environment variable takes a comma-separated list. |
 | `--view-configuration-file` | `VIEW_CONFIGURATION_FILE` | (none)  | The YAML file that describes how the head camera is drawn in the VR device. Read once when the node starts. |
+| `--video-workers` | `VIDEO_WORKERS` | `0` | Worker threads for JPEG decoding and WebRTC encoding; `0` keeps asyncio's default. |
 | `--calibration`          | `CALIBRATION`          | off         | Measure the neck pivot with the Y button, and show the instructions for it in the headset. Off unless asked for. |
 | `--neck-pivot-file`      | `NECK_PIVOT_FILE`      | `neck_pivot.yaml` | The YAML file a measured neck pivot offset is written to, and read back from at startup. |
 | `--max-linear-speed`    | `MAX_LINEAR_SPEED`    | `1.0`       | Maximum filtered hand translation speed in m/s; 0 disables the limit. |
 | `--max-angular-speed`   | `MAX_ANGULAR_SPEED`   | `6.0`       | Maximum filtered hand rotation speed in rad/s; 0 disables the limit. |
 | `--pose-timeout`        | `POSE_TIMEOUT`        | `0`         | Seconds without a new accepted XR frame before pausing hand poses; 0 disables the timeout. |
+
+Dora input waits use a separate single-thread executor, so they do not queue
+behind video jobs. For a CPU-constrained deployment, set `VIDEO_WORKERS` on the
+WebXR node (for example, `4`) and measure video latency and pose output rate.
+This limits the shared asyncio worker pool.
+It does not change resolution, frame rate, bitrate or quality settings. Leave
+it at `0` unless measurements justify a limit.
 
 ## License
 
