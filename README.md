@@ -373,7 +373,7 @@ Dora input waits use a separate single-thread executor, so they do not queue
 behind video jobs. For a CPU-constrained deployment, set `VIDEO_WORKERS` on the
 WebXR node (for example, `4`) and measure video latency and pose output rate.
 This limits the shared asyncio worker pool.
-it does not change resolution, frame rate, bitrate or quality settings. Leave
+It does not change resolution, frame rate, bitrate or quality settings. Leave
 it at `0` unless measurements justify a limit.
 
 ## License
