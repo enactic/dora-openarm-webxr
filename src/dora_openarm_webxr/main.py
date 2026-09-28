@@ -50,6 +50,7 @@ import collections
 import os
 import pathlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import dora
 import numpy as np
@@ -786,11 +787,13 @@ async def _main_uvicorn():
 
 
 async def _main_dora():
+    loop = asyncio.get_running_loop()
+    reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webxr-dora")
     try:
         while _serving():
             if node.is_empty():
                 # Keep WebRTC responsive; the timeout lets shutdown flags be checked.
-                event = await asyncio.to_thread(node.next, 0.1)
+                event = await loop.run_in_executor(reader, node.next, 0.1)
             else:
                 event = node.next()
             # None is the event stream closing under us, which is how a
@@ -807,6 +810,7 @@ async def _main_dora():
     finally:
         _send_quit_command()
         _stop()
+        await asyncio.to_thread(reader.shutdown, wait=True, cancel_futures=True)
 
 
 async def _main_hosted():
@@ -863,6 +867,13 @@ async def _main_webrtc_only():
 
 
 async def _main_async():
+    if args.video_workers:
+        # asyncio.run() owns shutdown of this pool; Dora reads use a separate one.
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(
+                max_workers=args.video_workers, thread_name_prefix="webxr-video"
+            )
+        )
     global webrtc_server, _state
     _state = _ConnectionState()
     webrtc_server = webrtc.WebRTCServer(
@@ -1025,6 +1036,8 @@ def main():
 
     global args
     args = parser.parse_args()
+    if args.video_workers < 0:
+        parser.error("--video-workers must be non-negative")
     for name in ("max_linear_speed", "max_angular_speed", "pose_timeout"):
         value = getattr(args, name)
         if not np.isfinite(value) or value < 0.0:

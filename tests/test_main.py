@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -394,3 +398,133 @@ def test_pose_mode_configuration(node, monkeypatch, capsys, mode, calibrate, err
         main.main()
         assert main._POSE_MODE == (mode or "neck")
         assert len(neck_reads) == (0 if mode == "relative" else 1)
+
+
+@pytest.mark.parametrize("ending", [None, {"type": "STOP"}, "error"])
+def test_dora_reader_does_not_wait_for_video_pool(node, monkeypatch, ending):
+    readers = []
+
+    def read(timeout):
+        assert timeout == 0.1
+        readers.append(threading.current_thread())
+        if ending == "error":
+            raise RuntimeError("read failed")
+        return ending
+
+    node.is_empty = lambda: True
+    node.next = read
+    monkeypatch.setattr(main, "_serving", lambda: True)
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a",))
+    monkeypatch.setattr(main, "server", None)
+    monkeypatch.setattr(main, "_running", True)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        release = threading.Event()
+        busy = loop.run_in_executor(None, release.wait)
+        task = asyncio.create_task(main._main_dora())
+
+        async def wait_for_read():
+            while not readers:
+                await asyncio.sleep(0.001)
+
+        try:
+            await asyncio.wait_for(wait_for_read(), 2)
+            assert not busy.done()
+        finally:
+            release.set()
+            await busy
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 2)
+        if ending == "error":
+            with pytest.raises(RuntimeError, match="read failed"):
+                task.result()
+        else:
+            task.result()
+
+    asyncio.run(run())
+    assert node.value("command")[0].as_py() == "quit"
+    assert not main._running
+    assert len(readers) == 1
+    assert readers[0].name.startswith("webxr-dora")
+    assert not readers[0].is_alive()
+
+
+def test_cancelled_dora_reader_keeps_loop_responsive_and_joins(node, monkeypatch):
+    release = threading.Event()
+    readers, released = [], []
+    node.is_empty = lambda: True
+    monkeypatch.setattr(main, "_serving", lambda: True)
+    monkeypatch.setattr(main, "_QUIT_BUTTONS", ("a",))
+    monkeypatch.setattr(main, "server", None)
+    monkeypatch.setattr(main, "_running", True)
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+
+        def read(timeout):
+            assert timeout == 0.1
+            readers.append(threading.current_thread())
+            loop.call_soon_threadsafe(started.set)
+            released.append(release.wait(2))
+
+        node.next = read
+        task = asyncio.create_task(main._main_dora())
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            # This coroutine must resume while cleanup is still joining the reader.
+            assert not task.done()
+            assert node.value("command")[0].as_py() == "quit"
+            assert not main._running
+        finally:
+            release.set()
+            if not task.cancelling():
+                task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+
+    asyncio.run(run())
+    assert released == [True]
+    assert len(readers) == 1
+    assert not readers[0].is_alive()
+
+
+@pytest.mark.parametrize("workers", [0, 2])
+@pytest.mark.parametrize("offer", [None, "offer"])
+def test_video_pool_configuration_and_shutdown(monkeypatch, workers, offer):
+    pools, threads = [], []
+
+    def create_pool(**kwargs):
+        pools.append(kwargs)
+        return ThreadPoolExecutor(**kwargs)
+
+    async def hosted():
+        threads.append(await asyncio.to_thread(threading.current_thread))
+
+    monkeypatch.setattr(
+        main, "args", SimpleNamespace(video_workers=workers, offer=offer)
+    )
+    monkeypatch.setattr(main, "_state", None)
+    monkeypatch.setattr(main, "webrtc_server", None)
+    monkeypatch.setattr(main, "ThreadPoolExecutor", create_pool)
+    monkeypatch.setattr(main, "_main_hosted", hosted)
+    monkeypatch.setattr(main, "_main_webrtc_only", hosted)
+    asyncio.run(main._main_async())
+    assert pools == (
+        [{"max_workers": workers, "thread_name_prefix": "webxr-video"}]
+        if workers
+        else []
+    )
+    assert not threads[0].is_alive()
+
+
+def test_negative_video_workers_rejected(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["webxr", "--video-workers", "-1"])
+    monkeypatch.setattr(main, "args", None)
+    with pytest.raises(SystemExit) as error:
+        main.main()
+    assert error.value.code == 2
+    assert "--video-workers must be non-negative" in capsys.readouterr().err
