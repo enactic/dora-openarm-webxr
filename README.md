@@ -227,6 +227,43 @@ Anatomy varies, so tune it per operator, or measure it as described in
 `[0, 0, 0]` goes back to subtracting the headset position. A measured
 offset in `--neck-pivot-file` wins over this one.
 
+Both files also take `pose.clutch`, which turns on a clutch. Squeeze a grip to
+drive that hand and let go to reposition: the target moves only while engaged,
+by as much as the controller does, and a re-grip continues from where it was
+held instead of jumping to the hand. Without it, nothing below applies.
+
+```yaml
+pose:
+  clutch:
+    # Where IK starts, in the arm_origin frame: [x, y, z, qw, qx, qy, qz]. A
+    # first engagement starts from here, so a wrong value is a jump.
+    initial_right: [0.216, -0.1535, -0.22, 0.7071, 0.0, -0.7071, 0.0]
+    initial_left: [0.216, 0.1535, -0.22, 0.7071, 0.0, -0.7071, 0.0]
+```
+
+- Each hand engages when its grip passes 0.6 and releases when it falls to 0.4.
+- The grip has to be seen open before a squeeze counts, on startup, in a new
+  session, and after any unusable input: a missing or invalid pose, grip or
+  trigger, or no new frame for `--pose-timeout`, which is 0.2 seconds here
+  unless set. A grip held through any of these does nothing until reopened.
+- Both hands are published while either is engaged, a released hand's target
+  staying where it was, because bimanual IK solves only once it has a target
+  from each. Nothing is published with neither engaged, and that stops anything
+  a dataflow clocks from these poses, such as arm state requests.
+- The operator frame is frozen at engagement: the headset's orientation in
+  `relative` mode, the WebXR local axes in `neck` mode. A head movement does not
+  move the target, and walking while engaged does.
+- A released hand holds its gripper. After a re-grip the gripper keeps that angle
+  until the trigger reaches it, then follows.
+- A target past the arm's reach is not limited here: the arm stops short, and the
+  hand has to come back by the overshoot.
+- `pose.frame_offset` and the neck pivot do not apply, since nothing is absolute.
+- It cannot be used with `--calibration`.
+
+The clutch keeps targets continuous. It does not read robot state, so it cannot
+tell whether the arm is where its target says, and stopping publication is not
+a robot stop command. It has not been validated on hardware.
+
 ## Calibrating the neck pivot
 
 Rather than guessing the offset, measure it: the operator turns their

@@ -528,3 +528,341 @@ def test_negative_video_workers_rejected(monkeypatch, capsys):
         main.main()
     assert error.value.code == 2
     assert "--video-workers must be non-negative" in capsys.readouterr().err
+
+
+# pose.clutch: the node's side of dora_openarm_webxr.clutch, which has its own
+# tests. These use a fake dora node and a fake clock, and touch no hardware.
+
+_CLUTCH_INITIAL = {
+    "initial_right": [0.2, -0.15, -0.2, 0.7071068, 0.0, -0.7071068, 0.0],
+    "initial_left": [0.2, 0.15, -0.2, 0.7071068, 0.0, -0.7071068, 0.0],
+}
+
+
+@pytest.fixture
+def clutches(monkeypatch):
+    hands = main._build_clutches(_CLUTCH_INITIAL)
+    monkeypatch.setattr(main, "_CLUTCHES", hands)
+    monkeypatch.setattr(main, "_POSE_TIMEOUT", 0.2)
+    return hands
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1.0]
+    monkeypatch.setattr(main.time, "perf_counter", lambda: now[0])
+    return now
+
+
+def _clutch_frame(sequence, grip_right=0.0, grip_left=0.0, x=0.0):
+    frame = _hand_frame(sequence)
+    frame["grip_right"] = grip_right
+    frame["grip_left"] = grip_left
+    frame["pose_right"]["x"] = x
+    return frame
+
+
+def _tick(state, clock, frame=None):
+    node_outputs = main.node.outputs
+    node_outputs.clear()
+    clock[0] += 0.004
+    if frame is not None:
+        main._process_frame(frame, state)
+    main._publish_poses(state)
+    return {
+        output_id: np.array(value.field("pose")[0].values)
+        for output_id, value in node_outputs
+        if output_id in ("pose_right", "pose_left")
+    }
+
+
+def _engage(state, clock, sequence=1, grip_right=1.0, grip_left=1.0, x=0.0):
+    _tick(state, clock, _clutch_frame(sequence, x=x))
+    return _tick(state, clock, _clutch_frame(sequence + 1, grip_right, grip_left, x))
+
+
+def test_clutch_off_leaves_the_default_path_alone(node, clock):
+    assert main._CLUTCHES == {}
+    state = main._ConnectionState()
+    assert set(_tick(state, clock, _hand_frame())) == {"pose_right", "pose_left"}
+
+
+def test_clutch_first_engagement_publishes_the_initial_targets(node, clutches, clock):
+    state = main._ConnectionState()
+    outputs = _engage(state, clock, x=3.0)
+    np.testing.assert_allclose(
+        outputs["pose_right"][:7], _CLUTCH_INITIAL["initial_right"], atol=1e-6
+    )
+    np.testing.assert_allclose(
+        outputs["pose_left"][:7], _CLUTCH_INITIAL["initial_left"], atol=1e-6
+    )
+    # Open: the trigger has been at rest, and the gripper starts open.
+    assert outputs["pose_right"][7] == pytest.approx(np.deg2rad(-45.0), abs=1e-6)
+
+
+def test_clutch_publishes_nothing_until_authorized(node, clutches, clock):
+    state = main._ConnectionState()
+    assert _tick(state, clock, _clutch_frame(1, 1.0, 1.0)) == {}
+    assert _tick(state, clock, _clutch_frame(2, 1.0, 1.0)) == {}
+
+
+def test_clutch_publishes_nothing_while_both_hands_are_released(node, clutches, clock):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    assert _tick(state, clock, _clutch_frame(3, x=0.5)) == {}
+    assert "pose_right" not in node.ids()
+    # The buttons, triggers and grips keep flowing.
+    assert "grip_right" in node.ids()
+
+
+def test_clutch_regrip_continues_from_the_published_target(node, clutches, clock):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    for sequence in range(3, 30):
+        moved = _tick(
+            state, clock, _clutch_frame(sequence, 1.0, 1.0, x=(sequence - 2) * 0.002)
+        )
+    held = moved["pose_right"]
+
+    assert _tick(state, clock, _clutch_frame(30, x=2.0)) == {}
+    regripped = _tick(state, clock, _clutch_frame(31, 1.0, 1.0, x=2.0))
+    np.testing.assert_array_equal(regripped["pose_right"], held)
+    # And it stays there while the hand stays still.
+    still = _tick(state, clock, _clutch_frame(32, 1.0, 1.0, x=2.0))
+    np.testing.assert_allclose(still["pose_right"], held, atol=1e-6)
+
+
+def test_clutch_step_is_bounded_by_the_speed_limit_after_a_regrip(
+    node, clutches, clock
+):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    _tick(state, clock, _clutch_frame(3))
+    _tick(state, clock, _clutch_frame(4, 1.0, 1.0))
+    last = None
+    for sequence in range(5, 25):
+        # A hand moving far faster than the limit.
+        outputs = _tick(
+            state, clock, _clutch_frame(sequence, 1.0, 1.0, x=(sequence - 4) * 0.5)
+        )
+        if last is not None:
+            step = np.linalg.norm(outputs["pose_right"][:3] - last)
+            assert 0.0 < step <= main._MAX_LINEAR_SPEED * 0.004 + 1e-5
+        last = outputs["pose_right"][:3]
+
+
+def test_clutch_released_hand_holds_while_the_other_moves(node, clutches, clock):
+    # Bimanual IK needs both targets, so this is what lets one hand keep working.
+    state = main._ConnectionState()
+    _engage(state, clock)
+    held = main._CLUTCHES["left"].target.position.copy()
+    for sequence in range(3, 8):
+        frame = _clutch_frame(sequence, 1.0, 0.0, x=sequence * 0.001)
+        frame["pose_left"]["x"] = sequence * 0.1
+        outputs = _tick(state, clock, frame)
+        np.testing.assert_allclose(outputs["pose_left"][:3], held, atol=1e-6)
+    assert (
+        np.linalg.norm(outputs["pose_right"][:3] - _CLUTCH_INITIAL["initial_right"][:3])
+        > 0.0
+    )
+
+
+def test_clutch_one_hand_engages_with_the_other_never_authorized(node, clutches, clock):
+    state = main._ConnectionState()
+    outputs = _engage(state, clock, grip_right=1.0, grip_left=0.0)
+    assert set(outputs) == {"pose_right", "pose_left"}
+    np.testing.assert_allclose(
+        outputs["pose_left"][:7], _CLUTCH_INITIAL["initial_left"], atol=1e-6
+    )
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        {"pose_right": None},
+        {"pose_right": {"x": 0.0}},
+        {"grip_right": None},
+        {"grip_right": 2.0},
+        {"trigger_right": None},
+        {"pose_reference": None},
+    ],
+)
+def test_clutch_unusable_input_faults_the_hand(
+    node, clutches, clock, monkeypatch, corrupt
+):
+    monkeypatch.setattr(main, "_POSE_MODE", "relative")
+    state = main._ConnectionState()
+    _engage(state, clock)
+    held = main._CLUTCHES["right"].target
+    frame = {**_clutch_frame(3, 1.0, 1.0, x=1.0), **corrupt}
+    _tick(state, clock, frame)
+    assert main._CLUTCHES["right"].state is main.clutch.ClutchState.AWAIT_RELEASE
+    assert main._CLUTCHES["right"].target is held
+    # Good input with the grip still held does not bring it back.
+    _tick(state, clock, _clutch_frame(4, 1.0, 1.0, x=1.0))
+    assert main._CLUTCHES["right"].state is main.clutch.ClutchState.AWAIT_RELEASE
+
+
+def test_clutch_neck_mode_does_not_need_the_head(node, clutches, clock):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    frame = _clutch_frame(3, 1.0, 1.0)
+    del frame["pose_reference"]
+    assert set(_tick(state, clock, frame)) == {"pose_right", "pose_left"}
+
+
+def test_clutch_stale_link_stops_and_needs_a_new_squeeze(node, clutches, clock):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    assert _tick(state, clock, _clutch_frame(3, 1.0, 1.0))
+    clock[0] += 0.3
+    assert _tick(state, clock) == {}
+    for hand in main._CLUTCHES.values():
+        assert hand.state is main.clutch.ClutchState.AWAIT_RELEASE
+    assert _tick(state, clock, _clutch_frame(4, 1.0, 1.0)) == {}
+    assert _tick(state, clock, _clutch_frame(5)) == {}
+    assert set(_tick(state, clock, _clutch_frame(6, 1.0, 1.0))) == {
+        "pose_right",
+        "pose_left",
+    }
+
+
+def test_clutch_reconnect_with_the_grip_held_does_not_resume(
+    node, clutches, clock, monkeypatch
+):
+    state = main._ConnectionState()
+    monkeypatch.setattr(main, "_state", state)
+    _engage(state, clock)
+    moved = _tick(state, clock, _clutch_frame(3, 1.0, 1.0, x=0.01))["pose_right"]
+
+    # A new session with no tick in between, so nothing saw a gap.
+    main._on_session_end()
+    main._on_session_start()
+    state = main._state
+    assert _tick(state, clock, _clutch_frame(1, 1.0, 1.0, x=2.0)) == {}
+    assert _tick(state, clock, _clutch_frame(2, x=2.0)) == {}
+    resumed = _tick(state, clock, _clutch_frame(3, 1.0, 1.0, x=2.0))["pose_right"]
+    np.testing.assert_allclose(resumed, moved, atol=1e-6)
+
+
+def test_clutch_late_frame_cannot_reengage(node, clutches, clock):
+    state = main._ConnectionState()
+    _engage(state, clock)
+    _tick(state, clock, _clutch_frame(5))
+    main._process_frame(_clutch_frame(4, 1.0, 1.0), state)
+    assert _tick(state, clock) == {}
+
+
+@pytest.mark.parametrize("mode", ["neck", "relative"])
+def test_clutch_motion_matches_the_absolute_mapping(
+    node, clutches, clock, monkeypatch, mode
+):
+    # The check on the frames: with a still head, an engaged clutch has to move
+    # the target exactly as the absolute mapping would, for any controller
+    # motion, because all it changes is where that motion starts from.
+    monkeypatch.setattr(main, "_POSE_MODE", mode)
+    head_rotation = main.Rotation.from_euler("yx", [0.4, -0.2])
+    head = _pose([0.1, 1.6, -0.2], head_rotation)
+    start = _pose([0.2, 1.1, -0.4], main.Rotation.from_euler("zyx", [0.3, 0.2, 0.1]))
+    moved = _pose([0.3, 1.0, -0.6], main.Rotation.from_euler("zyx", [-0.2, 0.6, 0.4]))
+    # No filtering, so that this compares the mappings alone.
+    monkeypatch.setattr(main, "_MAX_LINEAR_SPEED", 0.0)
+    monkeypatch.setattr(main, "_MAX_ANGULAR_SPEED", 0.0)
+    monkeypatch.setattr(
+        main.OneEuroPoseSmoother, "smooth", lambda self, t, pose: pose.copy()
+    )
+
+    def absolute(pose):
+        return np.asarray(_adjust(pose, head))
+
+    state = main._ConnectionState()
+
+    def frame(sequence, grip, right):
+        return {
+            **_hand_frame(sequence),
+            "pose_reference": head,
+            "pose_right": right,
+            "grip_right": grip,
+            "grip_left": 0.0,
+        }
+
+    _tick(state, clock, frame(1, 0.0, start))
+    _tick(state, clock, frame(2, 1.0, start))
+    published = _tick(state, clock, frame(3, 1.0, moved))["pose_right"]
+    initial = np.array(_CLUTCH_INITIAL["initial_right"])
+
+    expected_position = initial[:3] + absolute(moved)[:3] - absolute(start)[:3]
+    np.testing.assert_allclose(published[:3], expected_position, atol=1e-5)
+
+    def rotation(wxyz):
+        return main.Rotation.from_quat(np.asarray(wxyz)[[1, 2, 3, 0]])
+
+    increment = rotation(absolute(moved)[3:7]) * rotation(absolute(start)[3:7]).inv()
+    expected_rotation = increment * rotation(initial[3:7])
+    assert (rotation(published[3:7]) * expected_rotation.inv()).magnitude() < 1e-5
+
+
+@pytest.mark.parametrize(
+    ("configuration", "calibrate", "error"),
+    [
+        ({"initial_right": _CLUTCH_INITIAL["initial_right"]}, False, "initial_left"),
+        ({**_CLUTCH_INITIAL, "initial_left": [0.0, 0.0, 0.0]}, False, "pose.clutch"),
+        ({**_CLUTCH_INITIAL, "initial_left": [0.0] * 7}, False, "not a valid pose"),
+        ("yes", False, "pose.clutch"),
+        (_CLUTCH_INITIAL, True, "--calibration cannot be used with pose.clutch"),
+    ],
+)
+def test_clutch_configuration_is_rejected_at_startup(
+    node, monkeypatch, capsys, configuration, calibrate, error
+):
+    argv = ["webxr", "--offer", "test", "--answer-port", "1234"]
+    if calibrate:
+        argv.append("--calibration")
+    monkeypatch.setattr(sys, "argv", argv)
+    for name in ("args", "_POSE_MODE", "_CALIBRATION_ENABLED", "_NECK_PIVOT_FILE"):
+        monkeypatch.setattr(main, name, getattr(main, name))
+    monkeypatch.setattr(main, "_CLUTCHES", {})
+    monkeypatch.setattr(main.video, "configure", lambda args: None)
+    monkeypatch.setattr(
+        main.video, "view_configuration", lambda: {"pose": {"clutch": configuration}}
+    )
+    monkeypatch.setattr(main, "_configure_neck_pivot", lambda *args: None)
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code == 2
+    assert error in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("given", "used"), [(0.0, 0.2), (0.5, 0.5)])
+def test_clutch_always_has_a_pose_timeout(node, monkeypatch, given, used):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "webxr",
+            "--offer",
+            "test",
+            "--answer-port",
+            "1234",
+            "--pose-timeout",
+            str(given),
+        ],
+    )
+    for name in ("args", "_POSE_MODE", "_CALIBRATION_ENABLED", "_NECK_PIVOT_FILE"):
+        monkeypatch.setattr(main, name, getattr(main, name))
+    monkeypatch.setattr(main, "_CLUTCHES", {})
+    monkeypatch.setattr(main, "_POSE_TIMEOUT", 0.0)
+    monkeypatch.setattr(main.video, "configure", lambda args: None)
+    monkeypatch.setattr(
+        main.video, "view_configuration", lambda: {"pose": {"clutch": _CLUTCH_INITIAL}}
+    )
+    monkeypatch.setattr(main, "_configure_neck_pivot", lambda *args: None)
+    monkeypatch.setattr(main.dora, "Node", lambda: node)
+
+    async def run():
+        pass
+
+    monkeypatch.setattr(main, "_main_async", run)
+    main.main()
+    assert main._POSE_TIMEOUT == used
+    assert set(main._CLUTCHES) == {"right", "left"}

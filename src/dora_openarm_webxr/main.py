@@ -61,7 +61,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from scipy.spatial.transform import Rotation
 
-from . import calibration, video, webrtc
+from . import calibration, clutch, video, webrtc
 from .smoothing import OneEuroPoseSmoother
 
 args = None
@@ -151,6 +151,15 @@ _BUTTONS = ("a", "b", "x", "y")
 # thing the operator sets out to do, not something a press wired to
 # another purpose can do by accident.
 _QUIT_BUTTONS: tuple = ()
+
+# Each hand's clutch, from ``pose: clutch`` in the view configuration. Empty
+# unless asked for. They live outside the per-session state because the held
+# target has to outlive a session: a reconnecting browser continues from it.
+_CLUTCHES: dict = {}
+
+# A clutch has to know when its input stopped, so it always has a timeout. This
+# is the one used when --pose-timeout does not name one.
+_CLUTCH_POSE_TIMEOUT = 0.2
 
 # Where an accepted run is written and where a saved one is read back from, at
 # startup, from --neck-pivot-file. A fit lives as long as the session
@@ -665,11 +674,86 @@ def _process_frame(response, state):
             )
 
 
+def _build_clutches(configuration):
+    """Build each hand's clutch from ``pose: clutch`` in the view configuration."""
+    clutches = {}
+    for side in ("right", "left"):
+        x, y, z, qw, qx, qy, qz = configuration[f"initial_{side}"]
+        fields = {"x": x, "y": y, "z": z, "qx": qx, "qy": qy, "qz": qz, "qw": qw}
+        initial = clutch.parse_pose(fields)
+        if initial is None:
+            raise ValueError(f"initial_{side} is not a valid pose")
+        clutches[side] = clutch.HandClutch(
+            initial, _map_trigger_to_gripper(0.0, side), _ROBOT_ROTATION
+        )
+    return clutches
+
+
+def _clutch_sample(response, side, smoother, now):
+    """Validate and filter one hand of a frame, or None if it is unusable.
+
+    The filter runs on the controller only while the hand is engaged, and starts
+    over at each engagement, so that its speed limit bounds the target's motion
+    and a hand that moved while released is not chased once it engages.
+    """
+    if response is None:
+        return None
+    controller = clutch.parse_pose(response.get(f"pose_{side}"))
+    grip = clutch.parse_grip(response.get(f"grip_{side}"))
+    trigger = clutch.parse_grip(response.get(f"trigger_{side}"))
+    if controller is None or grip is None or trigger is None:
+        return None
+    axes = Rotation.identity()
+    if _POSE_MODE == "relative":
+        head = clutch.parse_pose(response.get("pose_reference"))
+        if head is None:
+            return None
+        axes = head.rotation
+    raw = np.concatenate([controller.position, controller.rotation.as_quat()])
+    filtered = smoother.smooth(now, raw.astype(np.float32))
+    return clutch.Sample(
+        grip,
+        clutch.Pose(
+            filtered[:3].astype(np.float64),
+            Rotation.from_quat(filtered[3:]),
+        ),
+        axes,
+        _map_trigger_to_gripper(trigger, side),
+    )
+
+
+def _publish_clutched_poses(state, now):
+    """Update the clutches and publish both hands if either is engaged.
+
+    A released hand is only published for the other one's sake: bimanual IK
+    solves once it has a target from each hand. With neither engaged nothing is
+    sent, which also keeps a held gripper value from advancing a follower's
+    trigger-gated alignment with nobody holding the controllers.
+    """
+    for side, hand in _CLUTCHES.items():
+        smoother = state.smoothers[side]
+        if hand.state is not clutch.ClutchState.ENGAGED:
+            smoother.reset()
+        hand.update(_clutch_sample(state.latest_frame, side, smoother, now))
+    if not any(h.state is clutch.ClutchState.ENGAGED for h in _CLUTCHES.values()):
+        return
+    metadata = {"timestamp": time.time_ns()}
+    for side, hand in _CLUTCHES.items():
+        qx, qy, qz, qw = hand.target.rotation.as_quat()
+        pose = np.array(
+            [*hand.target.position, qw, qx, qy, qz, hand.gripper], dtype=np.float32
+        )
+        node.send_output(f"pose_{side}", _build_pose_output(pose), metadata)
+
+
 def _publish_poses(state):
     """Filter the latest raw targets and publish hand poses once per tick."""
     now = time.perf_counter()
     if _POSE_TIMEOUT > 0.0 and now - state.received_at > _POSE_TIMEOUT:
         state.latest_frame = None
+    if _CLUTCHES:
+        _publish_clutched_poses(state, now)
+        return
     response = state.latest_frame or {}
     reference = response.get("pose_reference")
     metadata = {"timestamp": time.time_ns()}
@@ -702,6 +786,8 @@ def _on_session_start():
     """Begin a session: fresh smoothers, fresh frame numbering."""
     global _state
     _state = _ConnectionState()
+    for hand in _CLUTCHES.values():
+        hand.revoke()
     node.send_output("status", pa.array(["ready"]), {"timestamp": time.time_ns()})
 
 
@@ -1113,6 +1199,17 @@ def main():
 
     if _POSE_MODE == "neck":
         _configure_neck_pivot(pose_configuration, args.neck_pivot_file)
+
+    clutch_configuration = pose_configuration.get("clutch")
+    if clutch_configuration is not None:
+        if args.calibration:
+            parser.error("--calibration cannot be used with pose.clutch")
+        global _CLUTCHES
+        try:
+            _CLUTCHES = _build_clutches(clutch_configuration)
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            parser.error(f"pose.clutch: {error!r}")
+        _POSE_TIMEOUT = _POSE_TIMEOUT or _CLUTCH_POSE_TIMEOUT
 
     global node
     node = dora.Node()
