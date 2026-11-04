@@ -16,10 +16,10 @@ name: Package
 on:
   push:
     branches-ignore:
-      - 'copilot/**'
-      - 'dependabot/**'
+      - "copilot/**"
+      - "dependabot/**"
     tags:
-      - '**'
+      - "**"
   pull_request:
 concurrency:
   group: ${{ github.head_ref || github.sha }}-${{ github.workflow }}
